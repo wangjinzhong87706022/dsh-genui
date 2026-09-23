@@ -17,6 +17,30 @@
  * @module @changfenhuang/dsh-genui/shared/fence-repair
  */
 
+/**
+ * Tier-0 repair — strip `undefined` literals a model copied from a tool
+ * result's JavaScript object notation (`"page_num":undefined`). `undefined`
+ * cannot appear in legal JSON, so every occurrence is a copy-paste artifact
+ * whose only correct reading is "absent". Adopted only when the stripped
+ * body parses.
+ */
+export function stripUndefinedLiterals(raw: string): string | null {
+  if (!/\bundefined\b/.test(raw)) return null
+  let out = raw
+  out = out.replace(/,\s*"[^"\\]*"\s*:\s*undefined(?=\s*[,\]}\s])/g, '')
+  out = out.replace(/"[^"\\]*"\s*:\s*undefined\s*,/g, '')
+  out = out.replace(/:\s*undefined(?=\s*[,\]}\s])/g, ':null')
+  out = out.replace(/,\s*undefined(?=\s*[\]}\s])/g, '')
+  out = out.replace(/\[\s*undefined\s*,/g, '[')
+  if (out === raw) return null
+  try {
+    JSON.parse(out)
+    return out
+  } catch {
+    return null
+  }
+}
+
 /** A fence body counts as complete when it parses as a whole JSON value. */
 export function isCompleteJson(raw: string): boolean {
   try {

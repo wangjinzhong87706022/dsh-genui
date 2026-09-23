@@ -27,6 +27,7 @@ import { ImageNode } from './image.tsx'
 import { SvgNode } from './svg.tsx'
 
 import { EChartNode } from '../EChartNode.tsx'
+import { CitationsNode } from './citations.tsx'
 
 /** Custom node data shape (declared locally: pristine hosts export no type). */
 interface GenuiCustomNode {
@@ -469,6 +470,7 @@ export function renderNode(
     case 'diagram': return <DiagramNode key={key} node={node} />
 
     case 'echart': return <EChartNode key={key} node={node} />
+    case 'citations': return <CitationsNode key={key} node={node} />
     default: {
       // Plugin-registered custom types: a plugin ships a renderer through
       // registerGenuiComponent; unregistered unknowns render nothing. The

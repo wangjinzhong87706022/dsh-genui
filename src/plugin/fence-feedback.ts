@@ -7,7 +7,8 @@
  * fence while the user is still looking at the raw JSON.
  *
  * The loop is deliberately narrow, matching the contract agreed on the issue:
- * - **默认开启。** 插件配置中的 `fenceFeedback: false` 可以关闭回合转向。
+ * - **Opt-in.** `fenceFeedback: true` in this plugin's config; a host that does
+ *   not ask for it never steers anything.
  * - **Bounded.** At most one correction per turn AND at most one per fence
  *   body per process, so a correction that is itself wrong cannot loop.
  * - **Never for subagents.** A child session's fence belongs to a parent reply.
@@ -18,8 +19,10 @@
  *   so a re-entrant boundary cannot deliver the same correction twice.
  * - **Cancellation-aware.** An aborted turn or a missing session is left alone.
  *
- * 检查会复用 renderer 在回合结束后的流程，包括 JSON 修复和坏节点清理；
- * 已经可以渲染的最终回复不会收到修正请求。
+ * Detection reuses the renderer's own pipeline (`parsePartialGenuiSpec` →
+ * `processGenuiSpec` → `isRenderableProcess`) and the tool's model-facing
+ * diagnosis, so the correction quotes the same field errors the validator
+ * reports.
  * @module @changfenhuang/dsh-genui/plugin/fence-feedback
  */
 
@@ -28,16 +31,15 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import { createHash, randomUUID } from 'node:crypto'
-import { droppedNodeFailure } from './genui-diagnostic.ts'
-import { resolveFence } from '../shared/fence-resolve.ts'
+import { isRenderableProcess, processGenuiSpec } from '../client/guard.ts'
+import { parsePartialGenuiSpec } from '../client/parse-partial.ts'
+import { droppedNodeFailure } from './tool.ts'
 
 /** Plugin name recorded on every message this loop steers. */
 export const FEEDBACK_PLUGIN_NAME = '@changfenhuang/dsh-genui'
 
-/** Marker prefix inside the correction text: `[genui-fence-repair #<fingerprint>]`. */
-const MARKER_PREFIX = '[genui-fence-repair #'
-/** Marker prefix written by older plugin versions. */
-const LEGACY_MARKER_PREFIX = '[genui 自修 #'
+/** Marker prefix inside the correction text: `[genui 自修 #<fingerprint>]`. */
+const MARKER_PREFIX = '[genui 自修 #'
 
 /** A fence opener is an info string of exactly `dsh-ui` (≤3 spaces indent). */
 const FENCE_OPEN = /^ {0,3}```[ \t]*dsh-ui[ \t]*$/u
@@ -113,15 +115,15 @@ export function fenceFailures(text: string): FenceFailure[] {
 
 /** `null` when this fence renders; otherwise the reason it does not. */
 function fenceFailureDetail(fence: ExtractedFence): string | null {
-  if (!fence.closed) return 'error=unterminated_fence\nrequired=closing_fence'
-  const resolution = resolveFence(fence.raw, { settled: true })
-  if (resolution.spec !== null) return null
-  if (resolution.processed !== null) {
-    const dropped = droppedNodeFailure(resolution.processed, resolution.value)
-    return dropped?.join('\n')
-      ?? ['error=invalid_spec', ...resolution.processed.errors.map(error => `diagnostic=${JSON.stringify(error)}`)].join('\n')
-  }
-  return 'error=invalid_json\nrepair=failed'
+  if (!fence.closed) return '❌ 围栏未闭合：缺少结尾的 ``` 行。'
+  const parsed = parsePartialGenuiSpec(fence.raw)
+  if (parsed === null) return '❌ 围栏内容不是合法 JSON，也不是能部分恢复的 GenUI spec。'
+  const processed = processGenuiSpec(parsed)
+  if (isRenderableProcess(processed)) return null
+  // The tool's diagnosis names the dropped node and the field that is missing;
+  // fall back to the raw error list when nothing was dropped (case B: a bare
+  // root misread as an envelope reports missing `type` instead).
+  return droppedNodeFailure(processed, parsed) ?? `❌ 验证未通过：${processed.errors.join('；')}`
 }
 
 /**
@@ -131,11 +133,14 @@ function fenceFailureDetail(fence: ExtractedFence): string | null {
  * @returns the message text to steer into the running turn.
  */
 export function fenceCorrectionText(failures: readonly FenceFailure[]): string {
+  const head = failures.length === 1
+    ? `你上一条回复里的 dsh-ui 围栏没有渲染成界面，用户只看到了原始 JSON。`
+    : `你上一条回复里有 ${failures.length} 个 dsh-ui 围栏没有渲染成界面，用户只看到了原始 JSON。`
   const body = failures
-    .map(failure => `fence=${failure.index}\nfingerprint=${failure.fingerprint}\n${failure.detail}`)
-    .join('\n\n')
+    .map(failure => `\n第 ${failure.index} 个围栏：\n${failure.detail}`)
+    .join('\n')
   const marker = failures.map(failure => `${MARKER_PREFIX}${failure.fingerprint}]`).join(' ')
-  return `${marker}\n\n[genui-fence-repair]\nstatus=render_failed\nfences=${failures.length}\nnext=resend_corrected_fence_only\nrepeat_rendered_content=false\nreply_language=conversation\n\n${body}\n`
+  return `${marker}\n${head}请只重发修正后的 dsh-ui 围栏（不要解释、不要重复已经渲染好的部分）：${body}\n`
 }
 
 /**
@@ -158,7 +163,7 @@ export function createFeedbackMessage(text: string): UserMessage {
       kind: 'plugin',
       plugin: FEEDBACK_PLUGIN_NAME,
       form: 'notice',
-      summary: 'genui fence repair requested',
+      summary: 'dsh-ui 围栏未渲染，已请求模型自修',
     },
   }
   Object.freeze(message.content)
@@ -228,24 +233,18 @@ function textOfContent(content: unknown): string {
 /** Fingerprints this loop already recorded inside a steered correction. */
 function markersIn(text: string): string[] {
   const out: string[] = []
-  let cursor = 0
-  while (cursor < text.length) {
-    const current = text.indexOf(MARKER_PREFIX, cursor)
-    const legacy = text.indexOf(LEGACY_MARKER_PREFIX, cursor)
-    if (current < 0 && legacy < 0) break
-    const useLegacy = legacy >= 0 && (current < 0 || legacy < current)
-    const prefix = useLegacy ? LEGACY_MARKER_PREFIX : MARKER_PREFIX
-    const index = useLegacy ? legacy : current
-    const end = text.indexOf(']', index + prefix.length)
+  let index = text.indexOf(MARKER_PREFIX)
+  while (index >= 0) {
+    const end = text.indexOf(']', index)
     if (end < 0) break
-    out.push(text.slice(index + prefix.length, end))
-    cursor = end + 1
+    out.push(text.slice(index + MARKER_PREFIX.length, end))
+    index = text.indexOf(MARKER_PREFIX, end + 1)
   }
   return out
 }
 
 /**
- * 根据插件配置启用围栏反馈流程。
+ * Install the opt-in fence feedback loop.
  *
  * @param ctx - the host context.
  * @param enabled - the plugin config flag; the loop is inert when false.
@@ -262,20 +261,12 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     return state
   }
 
-  ctx.on('session/disposed', (session): void => {
-    sessions.delete(String(session.id))
-  })
-
   ctx.on('session/event', (session, event: SessionEvent) => {
-    const sessionId = String(session.id)
+    const state = stateOf(String(session.id))
     if (event.type === 'assistant/message') {
-      const text = textOfContent((event.data as { message?: { content?: unknown } }).message?.content)
-      if (extractDshUiFences(text).length === 0) {
-        const state = sessions.get(sessionId)
-        if (state !== undefined) state.text = ''
-        return
-      }
-      stateOf(sessionId).text = text
+      // Only the LAST assistant message of a turn is the reply the reader sees:
+      // an earlier step's fence was already replaced by the model.
+      state.text = textOfContent((event.data as { message?: { content?: unknown } }).message?.content)
       return
     }
     if (event.type !== 'user/message') return
@@ -283,15 +274,11 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     if (data.source?.kind === 'plugin' && data.source.plugin === FEEDBACK_PLUGIN_NAME) {
       // Our own correction (re-observed after a plugin reload): adopt its
       // fingerprints so a second boundary cannot repeat it.
-      const fingerprints = markersIn(textOfContent(data.content))
-      if (fingerprints.length === 0) return
-      const state = stateOf(sessionId)
-      for (const fingerprint of fingerprints) state.corrected.add(fingerprint)
+      for (const fingerprint of markersIn(textOfContent(data.content))) state.corrected.add(fingerprint)
       return
     }
     // A genuine user prompt starts a new turn: the previous reply is settled.
-    const state = sessions.get(sessionId)
-    if (state !== undefined) state.text = ''
+    state.text = ''
   })
 
   ctx.on('agent/turn-stopping', ({ agent, turn, signal }): void => {

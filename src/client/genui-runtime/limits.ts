@@ -25,6 +25,7 @@ export const GENUI_LIMITS = {
   maxTableCols: 12,
   /** Maximum `chart` data points per series. */
   maxChartPoints: 60,
+  maxCitations: 24,
   /** Maximum `plot` series and per-series parameters. */
   maxPlotSeries: 8,
   maxPlotParams: 6,

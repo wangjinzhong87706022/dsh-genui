@@ -32,7 +32,8 @@ import { installDomFenceRenderer } from './dom-fence.tsx'
 import { renderGenuiFence, type GenuiFenceContext } from './fence-render.tsx'
 import { renderSvgFence } from './svg-fence.tsx'
 import { createPanelSlashSource } from './panel-command.ts'
-import { GenuiPanel, type GenuiPanelInjected } from './panel.tsx'
+import { GenuiPanelIsland, type GenuiPanelInjected } from './panel.tsx'
+import { enhanceCitationsInElement } from './markdown-citation-enhancer.ts'
 import { GenuiToolView } from './toolview.tsx'
 import { mountAchievementToasts } from './achievement-toast.tsx'
 import { bridgeHostLocale } from './i18n/index.ts'
@@ -179,7 +180,28 @@ export function apply(ctx: Context): () => void {
     id: 'genui-panel',
     order: 50,
     inject: (sessionId: SessionId): GenuiPanelInjected => panelActionSend(ctx, sessionId),
-  }, GenuiPanel)))
+  }, GenuiPanelIsland)))
+  // Markdown citation enhancer: the host renders `[ID:N]` / `[[chunkId]]`
+  // markers as plain text in message bodies; scan mounted subtrees and swap
+  // them for interactive badges (native listeners, no React synthetic need).
+  const enhanceAll = (): void => {
+    for (const el of document.querySelectorAll('[data-slot="conversation.session"], [data-composer-seat]')) {
+      enhanceCitationsInElement(el)
+    }
+  }
+  enhanceAll()
+  const enhancerObserver = new MutationObserver(mutations => {
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (node instanceof Element && (node.querySelector('[data-cite]') === null)) {
+          enhanceCitationsInElement(node)
+        }
+      }
+    }
+  })
+  enhancerObserver.observe(document.body, { childList: true, subtree: true })
+  disposers.push(() => enhancerObserver.disconnect())
+
   // /panel slash command: a deterministic, client-side entry point that
   // opens the panel dock (publishes the default spec + expand request),
   // clears it (/panel clear), or relays an instruction to the model

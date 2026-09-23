@@ -234,6 +234,34 @@ const diagramThemeSchema = recordSchema([], {
   link: 'string',
 })
 
+const citationRecordSchema = recordSchema(['n', 'doc'], {
+  n: 'number',
+  doc: 'string',
+  page: 'number',
+  clause: 'string',
+  quote: 'string',
+  chunkId: 'string',
+  documentId: 'string',
+  positions: 'array',
+}, {}, {}, {
+  // Models arriving from RAG flows write the ragflow chunk field names;
+  // aliases keep those recognizable instead of dropping the whole node.
+  documentName: 'doc',
+  document: 'doc',
+  source: 'doc',
+  title: 'doc',
+  id: 'n',
+  index: 'n',
+  page_num: 'page',
+  pageNum: 'page',
+  content: 'quote',
+  text: 'quote',
+  excerpt: 'quote',
+  snippet: 'quote',
+  chunk_id: 'chunkId',
+  document_id: 'documentId',
+})
+
 /** Root GenUI specification metadata used by diagnostics. */
 export const GENUI_SPEC_SCHEMA = schema(['items'], {
   title: 'string',
@@ -259,6 +287,7 @@ export const COMPONENT_SCHEMAS: Readonly<Record<string, ComponentSchema>> = {
   avatar: schema(['name'], { ...nodeFields, name: 'string', color: 'string' }),
   badge: schema(['label'], { ...nodeFields, label: 'string', tone: 'string', icon: 'string' }, { text: 'label', value: 'label' }, { enums: { tone: BADGE_TONES } }),
   breadcrumb: schema(['items'], { ...nodeFields, items: 'array' }),
+  citations: schema(['items'], { ...nodeFields, title: 'string', items: 'array' }, { sources: 'items', refs: 'items', references: 'items' }, { nested: { items: citationRecordSchema } }),
   button: schema(['label'], { ...nodeFields, label: 'string', tone: 'string', full: 'boolean', small: 'boolean', icon: 'string', action: 'string' }, {}, { enums: { tone: BUTTON_TONES } }),
   // `text`/`body`/`desc` are the model's default names for "the callout's
   // prose": a callout missing `content` is dropped by repair, which takes the

@@ -64,6 +64,7 @@ export type GenuiNode = (
   | GenuiBreadcrumb
   | GenuiQuiz
   | GenuiDiagram
+  | GenuiCitations
 ) & GenuiLayoutHints
 
   | GenuiEChart
@@ -762,6 +763,46 @@ export interface GenuiDiagram {
   zones?: GenuiDiagramZone[]
   /** Optional semantic-token overrides. */
   theme?: GenuiDiagramTheme
+}
+
+/* ---------------- v1.7: citations ---------------- */
+
+/** One citation anchor: an inline `[[N]]` marker resolves against these. */
+export interface GenuiCitation {
+  /** Marker number; the inline `[[N]]` badge and this entry share it. */
+  n: number
+  /** Source document name (e.g. `02-调度规程.pdf`). */
+  doc: string
+  /** Source page number (1-based), when known. */
+  page?: number
+  /** Clause / locator inside the document (e.g. `3.3 调度方式`). */
+  clause?: string
+  /** Verbatim excerpt shown in the popover / expanded entry. */
+  quote?: string
+  /** RAGFlow chunk id — provenance anchor for the host to link back. */
+  chunkId?: string
+  /** RAGFlow document id — provenance anchor for the host to link back. */
+  documentId?: string
+  /**
+   * Hit rectangles inside the source document: `[page, x0, x1, top, bottom]`
+   * tuples (1-based page, then the box). RAGFlow's deepdoc parser emits them
+   * for PDFs; the reader uses them to highlight the cited passage in the
+   * opened original. Absent for parsers that report no positions.
+   */
+  positions?: number[][]
+}
+
+/**
+ * Citations node: a RAGFlow-style "依据" (sources) card. Renders one teal
+ * numbered chip per entry (doc name + clause/page), expanding to the verbatim
+ * quote on click. Also registers the items so inline `[[N]]` markers in
+ * sibling `text` nodes open a popover with the same content.
+ */
+export interface GenuiCitations {
+  type: 'citations'
+  /** Card heading; defaults to the localized "依据". */
+  title?: string
+  items: GenuiCitation[]
 }
 
 /* ---------------- v1.6: ECharts ---------------- */

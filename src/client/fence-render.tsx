@@ -21,11 +21,12 @@ import { codeBlockLabels } from './primitive-labels.ts'
 import { t, useT } from './i18n/index.ts'
 import { ErrorBoundary } from './ErrorBoundary.tsx'
 import { GenuiBlock } from './GenuiBlock.tsx'
+import { isRenderableProcess, partialRepairGenuiSpec, processGenuiSpec } from './guard.ts'
 import { fenceStateKey } from './interaction-store.ts'
+import { parsePartialGenuiSpec } from './parse-partial.ts'
 import { applyPanelOperation, diagnosePanelBudget, type PanelOperationStatus } from './panel-store.ts'
 import type { GenuiSpec } from './spec.ts'
-import { describeJsonFailure, isCompleteJson } from '../shared/fence-repair.ts'
-import { resolveFence, resolveFenceSpec, type FenceResolution } from '../shared/fence-resolve.ts'
+import { completeFenceJson, describeJsonFailure, isCompleteJson, repairFenceJson, stripUndefinedLiterals } from '../shared/fence-repair.ts'
 
 /** Settled fence source identity (data shape, host-independent). */
 export interface GenuiFenceSource {
@@ -61,12 +62,17 @@ function formatChartProcessErrors(errors: string[]): string | null {
   return chartErrors.length === 0 ? null : chartErrors.join('；')
 }
 
-/** Return a semantic/schema diagnostic from the unified fence resolution. */
-function processSemanticFailure(resolution: FenceResolution): string | null {
-  if (resolution.spec !== null || resolution.processed === null) return null
-  const chartErrors = formatChartProcessErrors(resolution.processed.errors)
+/** Return a semantic/schema diagnostic for parseable raw fence content. */
+function processSemanticFailure(raw: string): string | null {
+  const stripped = stripUndefinedLiterals(raw)
+  const body = stripped ?? raw
+  const parsed = parsePartialGenuiSpec(body)
+  if (parsed === null) return null
+  const processed = processGenuiSpec(parsed)
+  if (isRenderableProcess(processed)) return null
+  const chartErrors = formatChartProcessErrors(processed.errors)
   return chartErrors === null
-    ? t('err.fieldValidation', { errors: resolution.processed.errors.join('；') })
+    ? t('err.fieldValidation', { errors: processed.errors.join('；') })
     : t('err.chartValidation', { errors: chartErrors })
 }
 
@@ -93,13 +99,10 @@ function processSemanticFailure(resolution: FenceResolution): string | null {
  * renderable, or it is an empty/streaming half).
  *
  * @param raw - the raw fence body.
- * @param options - whether settled-only structural repair may be used.
  * @returns the diagnostic text, or null.
  */
-export function describeFenceFailure(raw: string, options: { settled?: boolean } = {}): string | null {
-  const resolution = resolveFence(raw, { settled: options.settled ?? true })
-  if (resolution.spec !== null) return null
-  const processDiagnostic = processSemanticFailure(resolution)
+export function describeFenceFailure(raw: string): string | null {
+  const processDiagnostic = processSemanticFailure(raw)
   if (processDiagnostic !== null) {
     return t('err.fenceKeptAsCode', { diagnostic: processDiagnostic })
   }
@@ -120,10 +123,10 @@ export function describeFenceFailure(raw: string, options: { settled?: boolean }
  * @param raw - the raw fence body.
  * @returns the alert strip, or null when the body has nothing to report.
  */
-export function FenceDiagnostic({ raw, settled = false }: { raw: string; settled?: boolean }): ReactNode {
+export function FenceDiagnostic({ raw }: { raw: string }): ReactNode {
   // Subscribe so a language switch re-renders an already-visible diagnostic.
   useT()
-  const message = describeFenceFailure(raw, { settled })
+  const message = describeFenceFailure(raw)
   if (message === null) return null
   return <div style={FENCE_ERROR_STYLE} role="alert">{message}</div>
 }
@@ -171,6 +174,14 @@ function FencePanelPublisher({ sessionId, sourceId, order, spec }: {
   return null
 }
 
+/** Process one parsed value into a renderable spec: the strict pipeline, then
+ *  — when that refuses — a single partial retry that drops the erroring nodes
+ *  and renders what survives (issue #186: one bad node must not take the
+ *  whole fence back to a raw code block). */
+function repairRenderableSpec(value: unknown): GenuiSpec | null {
+  return partialRepairGenuiSpec(processGenuiSpec(value))
+}
+
 /**
  * Resolve a raw fence body to a guarded spec.
  *
@@ -185,7 +196,27 @@ function FencePanelPublisher({ sessionId, sourceId, order, spec }: {
  *   default/blank chart.
  */
 export function resolveGenuiSpec(raw: string, context?: GenuiFenceContext): GenuiSpec | null {
-  return resolveFenceSpec(raw, { settled: context?.source !== undefined })
+  // Tier-0 first: a body carrying `undefined` literals cannot parse at all,
+  // and every later tier runs JSON.parse on its input — strip them up front.
+  const stripped = stripUndefinedLiterals(raw)
+  const body = stripped ?? raw
+  const parsed = parsePartialGenuiSpec(body)
+  let spec = parsed === null ? null : repairRenderableSpec(parsed)
+  if (spec === null) {
+    const repaired = repairFenceJson(body)
+    if (repaired !== null) {
+      const reparsed = parsePartialGenuiSpec(repaired.text)
+      spec = reparsed === null ? null : repairRenderableSpec(reparsed)
+    }
+    if (spec === null && context?.source !== undefined) {
+      const completed = completeFenceJson(body)
+      if (completed !== null) {
+        const reparsed = parsePartialGenuiSpec(completed.text)
+        spec = reparsed === null ? null : repairRenderableSpec(reparsed)
+      }
+    }
+  }
+  return spec
 }
 
 /** The inline GenuiBlock tree for a resolved non-panel spec. */

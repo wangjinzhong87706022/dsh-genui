@@ -22,27 +22,6 @@ const WHITELISTED_COMPONENT_TYPES = [
   'mermaid', 'scene3d', 'timeline', 'file-tree', 'breadcrumb',
 ] as const
 
-const BROKEN_FENCE_REPLY = '```dsh-ui\n{"items":[{"type":"stat"}]}\n```'
-
-/** 将已经结束的 assistant 回复写入真实 Cordis Context。 */
-function emitAssistantReply(ctx: Context, session: object): void {
-  ctx.emit('session/event', session as never, {
-    type: 'assistant/message',
-    seq: 1,
-    time: 1,
-    data: { message: { content: [{ type: 'text', text: BROKEN_FENCE_REPLY }] } },
-  } as never)
-}
-
-/** 触发允许插件请求修正的回合结束事件。 */
-function emitTurnStopping(ctx: Context, session: object, steer: () => void): void {
-  ctx.emit('agent/turn-stopping', {
-    agent: { session, steer },
-    turn: 1,
-    signal: new AbortController().signal,
-  } as never)
-}
-
 describe('genui:fence section', () => {
   it('registers the dsh-ui fence language section', async () => {
     const assembly = await assemble()
@@ -63,10 +42,6 @@ describe('genui:fence section', () => {
     expect(text).toContain('"kind":"bars|line|donut"')
     expect(text).toContain('"label":"...","value":n')
     expect(text).toContain('series：bars 分组/堆叠 / line 多序列')
-    expect(text).toContain('LANGUAGE: reply+UI=conversation language')
-    expect(text).toContain('NEVER infer it from prompt/skill/examples/tools')
-    expect(text).toContain('never emit these placeholders literally')
-    expect(text).not.toContain('"title":"可选标题"')
   })
 
   it('keeps the full type whitelist in the slim section within the token budget', async () => {
@@ -194,8 +169,7 @@ describe('genui:fence section', () => {
       provider: 'dsh-genui',
       source: 'bundled',
     })
-    expect(skill?.description).toContain('Preserve conversation language')
-    expect(skill?.description).not.toMatch(/[\u3400-\u9fff]/u)
+    expect(skill?.description).toContain('完整组件与字段规范')
     expect(skill?.content).toContain('chart:')
     expect(skill?.content).not.toContain('name: genui')
 
@@ -223,32 +197,6 @@ describe('genui:fence section', () => {
     await ctx.plugin(GenUI)
     const assembly = await ctx.systemPrompt.assemble({})
     expect(assembly.sections.map(s => s.name)).toContain('genui:fence')
-  })
-
-  it('enables final fence feedback by default', async () => {
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    const genui = await ctx.plugin(GenUI)
-    const session = { id: 'default-feedback', header: { id: 'default-feedback' } }
-    let steerCalls = 0
-    const steer = () => { steerCalls += 1 }
-    emitAssistantReply(ctx, session)
-    emitTurnStopping(ctx, session, steer)
-    expect(steerCalls).toBe(1)
-    await genui.dispose()
-  })
-
-  it('allows final fence feedback to be disabled explicitly', async () => {
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    const genui = await ctx.plugin(GenUI, { fenceFeedback: false })
-    const session = { id: 'disabled-feedback', header: { id: 'disabled-feedback' } }
-    let steerCalls = 0
-    const steer = () => { steerCalls += 1 }
-    emitAssistantReply(ctx, session)
-    emitTurnStopping(ctx, session, steer)
-    expect(steerCalls).toBe(0)
-    await genui.dispose()
   })
 
   it('removes the asset route before a plugin reload', async () => {

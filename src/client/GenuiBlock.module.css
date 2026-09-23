@@ -2161,3 +2161,108 @@ button.ftNameBtn[aria-expanded] { cursor: pointer; }
 /* Formula markup remains phrasing content inside labels and buttons. */
 .inlineMath { display: inline; }
 .inlineMath [class~="katex-display"] { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+
+/* ── 引用角标/卡片/popover（rebuild 2026-09-22） ── */
+.citationEntry { display: flex; flex-direction: column; }
+.citationRowGroup { display: flex; align-items: center; gap: 4px; }
+.citationRow {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+  padding: 6px 4px; border: none; border-radius: 6px; background: transparent;
+  text-align: left; cursor: pointer; font: inherit;
+  color: var(--dsw-alias-label-primary); transition: background 0.12s ease;
+}
+.citationRow:hover { background: color-mix(in srgb, var(--dsl-g-accent) 8%, transparent); }
+.citationOpen {
+  flex-shrink: 0; padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--dsl-g-accent) 35%, transparent);
+  border-radius: var(--dsl-g-radius-pill); background: transparent;
+  color: var(--dsw-alias-label-secondary); font: inherit;
+  font-size: var(--dsl-g-font-meta); cursor: pointer; opacity: 0.72;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.citationOpen:hover { opacity: 1; background: color-mix(in srgb, var(--dsl-g-accent) 10%, transparent); }
+.citationChip {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 20px; padding: 0 6px;
+  border-radius: var(--dsl-g-radius-pill); font-size: 11px; font-weight: 600;
+  background: color-mix(in srgb, var(--dsl-g-accent) 22%, transparent);
+  color: var(--dsw-alias-state-business-primary, #4f8ef7);
+  border: 1px solid color-mix(in srgb, var(--dsl-g-accent) 40%, transparent);
+  flex-shrink: 0;
+}
+.citationDoc { font-size: var(--dsl-g-font-title); font-weight: 500; }
+.citationMeta { font-size: var(--dsl-g-font-meta); color: var(--dsw-alias-label-tertiary); }
+.citationCaret { margin-left: auto; color: var(--dsw-alias-label-tertiary); font-size: 10px; }
+.citationQuote {
+  margin: 2px 0 6px 30px; padding: 8px 10px; border-radius: 6px;
+  border-left: 2px solid color-mix(in srgb, var(--dsl-g-accent) 50%, transparent);
+  background: color-mix(in srgb, var(--dsl-g-accent) 6%, transparent);
+  font-size: var(--dsl-g-font-meta); line-height: 1.6;
+  color: var(--dsw-alias-label-secondary); white-space: pre-wrap;
+}
+.citeBadge {
+  color: var(--dsw-alias-state-business-primary, #4f8ef7);
+  cursor: pointer; font-weight: 600; padding: 0 1px;
+}
+.citationPopover {
+  position: fixed; z-index: 9998; max-width: 420px;
+  padding: 10px 12px; border-radius: var(--dsl-g-radius-surface);
+  border: 1px solid color-mix(in srgb, var(--dsl-g-accent) 40%, transparent);
+  background: var(--dsl-g-surface, #fff);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  font-size: var(--dsl-g-font-meta, 13px);
+  color: var(--dsw-alias-label-primary, #111);
+}
+.citationPopoverHead { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.citationPopoverDoc { font-weight: 600; }
+.citationPopoverMeta { font-size: 11px; color: var(--dsw-alias-label-tertiary, #888); }
+.citationPopoverQuote { line-height: 1.6; color: var(--dsw-alias-label-secondary, #444); white-space: pre-wrap; }
+.citationPopoverOpen {
+  margin-top: 8px; padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--dsl-g-accent) 35%, transparent);
+  border-radius: var(--dsl-g-radius-pill); background: transparent;
+  color: var(--dsw-alias-label-secondary, #444); font: inherit; font-size: 12px; cursor: pointer;
+}
+.citationPopoverOpen:hover { background: color-mix(in srgb, var(--dsl-g-accent) 10%, transparent); }
+
+/* ── 原文查看器弹层 ── */
+.originalViewer {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(0, 0, 0, 0.45);
+}
+.originalViewerPanel {
+  display: flex; flex-direction: column;
+  width: min(960px, 100%); height: min(88vh, 100%);
+  border-radius: var(--dsl-g-radius-surface, 8px);
+  background: var(--dsl-g-surface, #fff);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.28); overflow: hidden;
+}
+.originalViewerHead {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--dsl-g-accent) 18%, transparent);
+  font-size: var(--dsl-g-font-meta, 13px);
+}
+.originalViewerTitle {
+  font-weight: 600; color: var(--dsw-alias-label-primary, #111);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.originalViewerPage {
+  flex-shrink: 0; padding: 1px 8px;
+  border-radius: var(--dsl-g-radius-pill);
+  background: color-mix(in srgb, var(--dsl-g-accent) 16%, transparent);
+  color: var(--dsw-alias-label-secondary, #444); font-size: 12px;
+}
+.originalViewerDownload, .originalViewerClose {
+  flex-shrink: 0; margin-left: auto; padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--dsl-g-accent) 30%, transparent);
+  border-radius: var(--dsl-g-radius-pill); background: transparent;
+  color: var(--dsw-alias-label-secondary, #444); font: inherit;
+  font-size: 12px; text-decoration: none; cursor: pointer;
+}
+.originalViewerDownload:hover, .originalViewerClose:hover {
+  background: color-mix(in srgb, var(--dsl-g-accent) 10%, transparent);
+}
+.originalViewerClose { margin-left: 0; line-height: 1.2; }
+.originalViewerFrame { flex: 1; width: 100%; border: none; background: #f6f7f9; }
+.panelIsland { width: 100%; }

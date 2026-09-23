@@ -24,6 +24,7 @@
  * apply) queues a [genui-action] user message back to the model.
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import { IconChevronDownOutline14, IconChevronUpOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { GenuiActionContext, type GenuiActionHandler } from './action-context.ts'
@@ -57,6 +58,33 @@ export interface GenuiPanelInjected {
 }
 
 export type GenuiPanelProps = PropsRuntime<'conversation.input.dock'> & GenuiPanelInjected
+
+/**
+ * Island shell for the dock slot: the host renders THIS component inside its
+ * own React tree, and the real GenuiPanel mounts in genui's OWN root on a
+ * plain div. The deployed web build answers the plugin's `require('react')`
+ * with a different React instance than the one rendering the host tree —
+ * hooks inside a host-rendered genui component crash with "Invalid hook
+ * call". An own-root island is self-consistent: every hook below runs under
+ * genui's react-dom. The container div is the island's entire footprint.
+ */
+export function GenuiPanelIsland(props: GenuiPanelProps) {
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const [root, setRoot] = useState<Root | null>(null)
+  // 建 root 只做一次；props 变化走 render——重复 unmount/remount 会丢面板
+  // 的展开/拖拽交互状态。
+  useEffect(() => {
+    const container = hostRef.current
+    if (container === null) return
+    const created = createRoot(container)
+    setRoot(created)
+    return () => { created.unmount(); setRoot(null) }
+  }, [])
+  useEffect(() => {
+    root?.render(<GenuiPanel {...props} />)
+  }, [root, props])
+  return <div ref={hostRef} className={css.panelIsland} data-genui-panel-island="" />
+}
 
 /**
  * Panel dock entry. Renders nothing until the session's toolview published a

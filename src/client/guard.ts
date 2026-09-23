@@ -18,7 +18,7 @@
  * - The whole spec carries a node budget; once exhausted, remaining siblings
  *   are elided.
  */
-import type { GenuiFileTreeNode, GenuiList, GenuiNode, GenuiPlot, GenuiPlotSeries, GenuiScene3D, GenuiSpec, GenuiDiagram, GenuiDiagramTheme, GenuiDiagramKind } from './spec.ts'
+import type { GenuiFileTreeNode, GenuiList, GenuiNode, GenuiPlot, GenuiPlotSeries, GenuiScene3D, GenuiSpec, GenuiDiagram, GenuiDiagramTheme, GenuiDiagramKind, GenuiCitation } from './spec.ts'
 import { isComponentRoot, wrapSingleComponentRoot } from './spec.ts'
 import {
   BADGE_TONES, BUTTON_TONES, CALLOUT_TONES, CARD_TONES, CHART_KINDS, COMPONENT_SCHEMAS, HERO_TONES,
@@ -714,6 +714,13 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
         ...opt('option', option),
       }
     }
+    case 'citations': {
+      // `items` is canonical; retrieval-flow models also write sources/refs/
+      // references — accept any of them instead of dropping the whole node.
+      const items = repairCitationItems(v.items ?? v.sources ?? v.refs ?? v.references)
+      if (items === undefined) return null
+      return { type: 'citations', items, ...opt('title', str(v.title, GENUI_LIMITS.maxString)) }
+    }
     default:
       // Plugin-registered custom node types are opaque to the guard: pass
       // through unchanged (the renderer's default branch resolves them).
@@ -722,6 +729,64 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
 }
 
 /* ---------------- per-type sub-repairers ---------------- */
+
+/** Repair `citations.items`: tolerant of ragflow chunk field names. */
+function repairCitationItems(v: unknown): GenuiCitation[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  const out: GenuiCitation[] = []
+  for (let i = 0; i < Math.min(v.length, GENUI_LIMITS.maxCitations); i++) {
+    const e = obj(v[i])
+    if (e === undefined) continue
+    const n = int(e.n ?? e.id ?? e.index, 0, 999) ?? (i + 1)
+    const doc = str(e.doc ?? e.documentName ?? e.document ?? e.source ?? e.title, GENUI_LIMITS.maxString)
+    if (doc === undefined) continue
+    // Page numbers are 1-based; a 0 (or negative) is the model's "unknown"
+    // spelling and reads as absent rather than as page zero.
+    const pageRaw = e.page ?? e.page_num ?? e.pageNum
+    const page = typeof pageRaw === 'number' && Number.isFinite(pageRaw) && pageRaw >= 1
+      ? Math.min(99999, Math.trunc(pageRaw))
+      : undefined
+    out.push({
+      n,
+      doc,
+      ...opt('page', page),
+      ...opt('clause', str(e.clause, GENUI_LIMITS.maxString)),
+      ...opt('quote', str(e.quote ?? e.content ?? e.text ?? e.excerpt ?? e.snippet, GENUI_LIMITS.maxString)),
+      ...opt('chunkId', str(e.chunkId ?? e.chunk_id, 200)),
+      // Models occasionally copy the document NAME into document_id; the host
+      // proxy would 400 on it, so only an id-shaped value is kept (the reader
+      // then hides the "open original" action for that entry).
+      ...opt('documentId', citationDocumentId(e.documentId ?? e.document_id)),
+      // Hit rectangles `[page,x0,x1,top,bottom]` for in-document highlighting.
+      // Only well-formed 5-number tuples survive; a malformed one is dropped
+      // rather than failing the whole entry (the reader degrades to page-level).
+      ...opt('positions', repairCitationPositions(e.positions)),
+    })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/** RAGFlow document ids are lowercase hex-ish tokens; anything else is a
+ * mis-copied document name (observed: the model wrote the file name). */
+const DOCUMENT_ID_SHAPE = /^[0-9a-z][0-9a-z-]{7,63}$/
+
+/** Keep a documentId only when it is id-shaped, else undefined. */
+function citationDocumentId(v: unknown): string | undefined {
+  const id = str(v, 200)
+  return id !== undefined && DOCUMENT_ID_SHAPE.test(id) ? id : undefined
+}
+
+/** Keep only finite-number 5-tuples, bounded by the citation item budget. */
+function repairCitationPositions(v: unknown): number[][] | undefined {
+  if (!Array.isArray(v)) return undefined
+  const out: number[][] = []
+  for (const tuple of v.slice(0, GENUI_LIMITS.maxCitations)) {
+    if (!Array.isArray(tuple) || tuple.length !== 5) continue
+    if (!tuple.every(cell => typeof cell === 'number' && Number.isFinite(cell))) continue
+    out.push([tuple[0], tuple[1], tuple[2], tuple[3], tuple[4]])
+  }
+  return out.length > 0 ? out : undefined
+}
 
 function repairStrings(v: unknown, cap: number, strCap: number): string[] | undefined {
   if (!Array.isArray(v)) return undefined
@@ -1917,6 +1982,19 @@ function validateNode(value: unknown, depth: number, at: string, errors: string[
         errors.push(`${at}.details must be an array aligned with rows`)
       }
       validateTableRows(v.rows, `${at}.rows`, errors)
+      break
+    case 'citations':
+      if (!Array.isArray(v.items)) errors.push(`${at}: type 'citations' requires items (array)`)
+      if (Array.isArray(v.items)) {
+        for (let i = 0; i < v.items.length; i++) {
+          const item = obj(v.items[i])
+          if (item === undefined) { errors.push(`${at}.items[${i}] must be an object`); continue }
+          // null counts as absent here — repair backfills `n` from position
+          // and drops a doc-less entry, so the null itself is not the defect.
+          if (item.n !== undefined && item.n !== null && typeof item.n !== 'number') errors.push(`${at}.items[${i}].n must be a number`)
+          if (item.doc !== undefined && item.doc !== null && typeof item.doc !== 'string') errors.push(`${at}.items[${i}].doc must be a string`)
+        }
+      }
       break
     case 'chart':
       validateChartNode(v, at, errors)

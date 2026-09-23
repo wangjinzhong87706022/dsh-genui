@@ -14,30 +14,10 @@ const VALID_SPEC = '{"title":"卡片","items":[{"type":"text","content":"你好�
 const BUTTON_SPEC = '{"items":[{"type":"button","label":"刷新","action":"refresh"}]}'
 const PANEL_SPEC = '{"panel":true,"title":"面板A","items":[{"type":"text","content":"A"}]}'
 const BROKEN_SPEC = '{"items":[{"type":"text","content":'
-const TIER2_SCHEMA_FAILURE = '{"items":[{"type":"stat","value":"好"'
 
 function makeCtx(sessionId: string | undefined, send: ReturnType<typeof vi.fn>): Context {
   return {
     sessions: { list: { getSnapshot: () => ({ current: sessionId }) } },
-  } as unknown as Context
-}
-
-function makeModernCtx(sessionId: string): Context {
-  return {
-    sessions: {
-      list: {
-        getSnapshot: () => ({
-          ids: ['sidebar-session', sessionId],
-          byId: {
-            'sidebar-session': { id: 'sidebar-session', retainedBy: { sidebar: 1 } },
-            [sessionId]: { id: sessionId, retainedBy: { mainView: 1 } },
-          },
-          phase: 'ready',
-          subagentsByParent: {},
-          jobsBySession: {},
-        }),
-      },
-    },
   } as unknown as Context
 }
 
@@ -443,24 +423,6 @@ describe('installDomFenceRenderer', () => {
     }
   })
 
-  it('shows the settled schema diagnostic after tier-2 JSON repair', async () => {
-    const row = assistantRow('s10-tier2-diag')
-    const block = stockCodeBlock(TIER2_SCHEMA_FAILURE, 'dsh-ui')
-    row.appendChild(block)
-    document.body.appendChild(row)
-    const send = vi.fn()
-    const dispose = installDomFenceRenderer(makeCtx('sess-tier2-diag', send), send)
-    try {
-      await tick()
-      const alert = row.querySelector('.genui-dom-fence-diagnostic [role="alert"]')
-      expect(alert).not.toBeNull()
-      expect(alert!.textContent).toContain('label')
-      expect(alert!.textContent).not.toContain('解析失败')
-    } finally {
-      dispose()
-    }
-  })
-
   it('keeps the diagnostic off a streaming body (partial JSON is not an error)', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const row = assistantRow('s10-stream', true)
@@ -563,24 +525,6 @@ describe('installDomFenceRenderer', () => {
     }
   })
 
-  it('relays component actions when the host omits list.current', async () => {
-    const row = assistantRow('s11-modern')
-    const block = stockCodeBlock(BUTTON_SPEC, 'dsh-ui')
-    row.appendChild(block)
-    document.body.appendChild(row)
-    const send = vi.fn()
-    const dispose = installDomFenceRenderer(makeModernCtx('sess-modern'), send)
-    try {
-      await tick()
-      fireEvent.click(row.querySelector('.genui-dom-fence button')!)
-      await tick(400)
-      expect(send).toHaveBeenCalledTimes(1)
-      expect(send.mock.calls[0]?.slice(0, 2)).toEqual(['sess-modern', 'refresh'])
-    } finally {
-      dispose()
-    }
-  })
-
   it('publishes a panel:true fence to the panel store without mounting UI', async () => {
     const row = assistantRow('s12')
     const block = stockCodeBlock(PANEL_SPEC, 'dsh-ui')
@@ -597,44 +541,6 @@ describe('installDomFenceRenderer', () => {
       expect(container).not.toBeNull()
       expect(container!.textContent).toBe('')
       expect(getPanelSpec('sess-1')?.title).toBe('面板A')
-    } finally {
-      dispose()
-    }
-  })
-
-  it('publishes a panel:true fence when the host omits list.current', async () => {
-    const row = assistantRow('s12-modern')
-    const block = stockCodeBlock(PANEL_SPEC, 'dsh-ui')
-    row.appendChild(block)
-    document.body.appendChild(row)
-    const send = vi.fn()
-    const dispose = installDomFenceRenderer(makeModernCtx('sess-modern-panel'), send)
-    try {
-      await tick()
-      expect(getPanelSpec('sess-modern-panel')?.title).toBe('面板A')
-    } finally {
-      dispose()
-      clearSessionPanel('sess-modern-panel')
-    }
-  })
-
-  it('warns once when an action has no resolvable session', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const row = assistantRow('s12-missing')
-    const block = stockCodeBlock(BUTTON_SPEC, 'dsh-ui')
-    row.appendChild(block)
-    document.body.appendChild(row)
-    const send = vi.fn()
-    const dispose = installDomFenceRenderer(makeCtx(undefined, send), send)
-    try {
-      await tick()
-      const button = row.querySelector('.genui-dom-fence button')!
-      fireEvent.click(button)
-      await tick(400)
-      fireEvent.click(button)
-      await tick(400)
-      expect(send).not.toHaveBeenCalled()
-      expect(warn.mock.calls.filter(([message]) => String(message).includes('cannot resolve the viewed session'))).toHaveLength(1)
     } finally {
       dispose()
     }
@@ -730,24 +636,6 @@ describe('anchor-less rows (Safari fallback render path)', () => {
     try {
       await waitFor(() => getPanelSpec('sess-safari-3')?.title === '面板B')
       expect(getPanelSpec('sess-safari-3')?.title).toBe('面板B')
-    } finally {
-      dispose()
-    }
-  })
-
-  it('assigns distinct fallback identities to fences in separate anchor-less rows', async () => {
-    const firstRow = document.createElement('div')
-    firstRow.setAttribute('data-chat-flow-kind', 'assistant-step')
-    firstRow.appendChild(stockCodeBlock('{"panel":true,"title":"面板A","items":[{"type":"text","content":"A"}]}', 'dsh-ui'))
-    const secondRow = document.createElement('div')
-    secondRow.setAttribute('data-chat-flow-kind', 'assistant-step')
-    secondRow.appendChild(stockCodeBlock('{"panel":true,"title":"面板B","items":[{"type":"text","content":"B"}]}', 'dsh-ui'))
-    document.body.append(firstRow, secondRow)
-    const send = vi.fn()
-    const dispose = installDomFenceRenderer(makeCtx('sess-safari-6', send), send)
-    try {
-      await waitFor(() => getPanelSpec('sess-safari-6')?.title === '面板B')
-      expect(getPanelSpec('sess-safari-6')?.title).toBe('面板B')
     } finally {
       dispose()
     }

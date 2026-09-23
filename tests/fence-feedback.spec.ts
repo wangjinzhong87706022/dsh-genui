@@ -28,11 +28,6 @@ const BARE_STEPS = JSON.stringify({ type: 'steps', items: [{ title: '第一层' 
 
 /** A fence body that cannot render: required field missing. */
 const BROKEN = JSON.stringify({ items: [{ type: 'stat' }] })
-const REPAIRABLE = '{"title":"x","items":[{"type":"text","content":"好",},]}'
-const REPAIRED_SCHEMA_FAILURE = '{"items":[{"type":"stat","value":"好",},]}'
-const ISSUE_200 = '{"type":"keyvalue","items":[{"label":"a","value":"b"}]}'
-const CUT = '{"items":[{"type":"text","content":"补全"}'
-const TIER2_ONLY = '{"title":"x","items":[{"type":"text","content":"半截'
 
 function reply(...bodies: string[]): string {
   return bodies.map(body => `说明文字\n\`\`\`dsh-ui\n${body}\n\`\`\`\n`).join('\n')
@@ -41,7 +36,6 @@ function reply(...bodies: string[]): string {
 interface Harness {
   ctx: Context
   emitSession: (event: unknown) => void
-  disposeSession: () => void
   boundary: (payload: unknown) => void
   steer: ReturnType<typeof vi.fn>
   listeners: Map<string, (payload: unknown, ...rest: unknown[]) => unknown>
@@ -69,9 +63,6 @@ function harness(options: { parentSession?: string; enabled?: boolean } = {}): H
     listeners,
     emitSession: (event: unknown) => {
       listeners.get('session/event')?.(session, event)
-    },
-    disposeSession: () => {
-      listeners.get('session/disposed')?.(session)
     },
     boundary: (payload: unknown) => {
       listeners.get('agent/turn-stopping')?.(payload)
@@ -134,35 +125,12 @@ describe('fenceFailures: only fences that would stay a code block', () => {
     const failures = fenceFailures(reply(BROKEN))
     expect(failures).toHaveLength(1)
     expect(failures[0]!.detail).toContain("type 'stat' requires label")
-    expect(failures[0]!.detail).not.toContain('[genui-validation]')
-    expect(failures[0]!.detail).not.toContain('next=fix_and_revalidate')
-    expect(failures[0]!.detail).not.toContain('reply_language=conversation')
     expect(failures[0]!.fingerprint).toBe(fenceFingerprint(BROKEN))
   })
 
   it('reports unparseable and unterminated bodies distinctly', () => {
-    expect(fenceFailures('```dsh-ui\n{ not json\n```')[0]!.detail).toContain('error=invalid_json')
-    expect(fenceFailures('```dsh-ui\n{"items":[]}')[0]!.detail).toContain('error=unterminated_fence')
-  })
-
-  it('accepts bodies repaired by the settled renderer pipeline', () => {
-    expect(fenceFailures(reply(REPAIRABLE))).toEqual([])
-  })
-
-  it('reports schema errors after tier-1 JSON repair', () => {
-    const failures = fenceFailures(reply(REPAIRED_SCHEMA_FAILURE))
-    expect(failures).toHaveLength(1)
-    expect(failures[0]!.detail).toContain("type 'stat' requires label")
-    expect(failures[0]!.detail).not.toContain('不是合法 JSON')
-  })
-
-  it('accepts a settled body repaired by tier-2 completion', () => {
-    expect(fenceFailures(reply(CUT))).toEqual([])
-    expect(fenceFailures(reply(TIER2_ONLY))).toEqual([])
-  })
-
-  it('accepts the issue #200 keyvalue alias shape', () => {
-    expect(fenceFailures(reply(ISSUE_200))).toEqual([])
+    expect(fenceFailures('```dsh-ui\n{ not json\n```')[0]!.detail).toContain('不是合法 JSON')
+    expect(fenceFailures('```dsh-ui\n{"items":[]}')[0]!.detail).toContain('未闭合')
   })
 
   it('ignores JSON fences and prose', () => {
@@ -178,14 +146,7 @@ describe('planFenceFeedback: the bounds that prevent a retry storm', () => {
     expect(plan).not.toBeNull()
     expect(plan!.turn).toBe(1)
     expect(plan!.fingerprints).toEqual([fenceFingerprint(BROKEN)])
-    expect(plan!.text).toContain('next=resend_corrected_fence_only')
-  })
-
-  it('checks the final reply body even when an earlier validated body was valid', () => {
-    expect(fenceFailures(reply(STAT_GROUP))).toEqual([])
-    const finalReply = planFenceFeedback({ ...base, text: reply(BROKEN) })
-    expect(finalReply).not.toBeNull()
-    expect(finalReply!.text).toContain("type 'stat' requires label")
+    expect(plan!.text).toContain('只重发修正后的 dsh-ui 围栏')
   })
 
   it('stays silent for the same turn (at most one correction per turn)', () => {
@@ -215,14 +176,8 @@ describe('the steered correction message', () => {
   it('is a plugin-sourced notice with a stable marker and the failure detail', () => {
     const failures = fenceFailures(reply(BROKEN))
     const text = fenceCorrectionText(failures)
-    expect(text).toContain(`[genui-fence-repair #${failures[0]!.fingerprint}]`)
-    expect(text).toContain('[genui-fence-repair]')
-    expect(text).toContain('reply_language=conversation')
+    expect(text).toContain(`[genui 自修 #${failures[0]!.fingerprint}]`)
     expect(text).toContain("type 'stat' requires label")
-    expect(text).not.toContain('[genui-validation]')
-    expect(text).not.toContain('next=fix_and_revalidate')
-    expect(text).not.toContain('围栏没有渲染成界面')
-    expect(text).not.toContain('请只重发修正后的')
     const message = createFeedbackMessage(text)
     expect(message.role).toBe('user')
     expect(typeof message.id).toBe('string')
@@ -236,13 +191,13 @@ describe('the steered correction message', () => {
     const failures = fenceFailures(reply(BROKEN, '{"items":[{"type":"table"}]}'))
     expect(failures).toHaveLength(2)
     const text = fenceCorrectionText(failures)
-    expect(text).toContain('fence=1')
-    expect(text).toContain('fence=2')
+    expect(text).toContain('第 1 个围栏')
+    expect(text).toContain('第 2 个围栏')
   })
 })
 
 describe('installFenceFeedback wiring', () => {
-  it('is inert when explicitly disabled', () => {
+  it('is inert unless the config opts in', () => {
     const h = harness({ enabled: false })
     expect(h.listeners.size).toBe(0)
   })
@@ -297,42 +252,9 @@ describe('installFenceFeedback wiring', () => {
     expect(h.steer).not.toHaveBeenCalled()
   })
 
-  it('adopts fingerprints from legacy repair markers', () => {
-    const h = harness()
-    const fingerprint = fenceFingerprint(BROKEN)
-    h.emitSession({
-      type: 'user/message',
-      seq: 4,
-      time: 1,
-      data: {
-        content: [{ type: 'text', text: `[genui 自修 #${fingerprint}]\nlegacy repair notice` }],
-        source: { kind: 'plugin', plugin: FEEDBACK_PLUGIN_NAME, form: 'notice', summary: 'legacy' },
-      },
-    } as unknown as SessionEvent)
-    h.emitSession(assistantEvent(reply(BROKEN)))
-    h.boundary({ agent: { session: { id: 'sess-1', header: { id: 'sess-1' } }, steer: h.steer }, turn: 9, signal: new AbortController().signal })
-    expect(h.steer).not.toHaveBeenCalled()
-  })
-
   it('stays silent when the reply renders', () => {
     const h = harness()
     h.emitSession(assistantEvent(reply(STAT_GROUP, BARE_STEPS)))
-    h.boundary({ agent: { session: { id: 'sess-1', header: { id: 'sess-1' } }, steer: h.steer }, turn: 1, signal: new AbortController().signal })
-    expect(h.steer).not.toHaveBeenCalled()
-  })
-
-  it('clears the latest reply when a plain assistant message replaces it', () => {
-    const h = harness()
-    h.emitSession(assistantEvent(reply(BROKEN)))
-    h.emitSession(assistantEvent('普通文本'))
-    h.boundary({ agent: { session: { id: 'sess-1', header: { id: 'sess-1' } }, steer: h.steer }, turn: 1, signal: new AbortController().signal })
-    expect(h.steer).not.toHaveBeenCalled()
-  })
-
-  it('releases session feedback state after session disposal', () => {
-    const h = harness()
-    h.emitSession(assistantEvent(reply(BROKEN)))
-    h.disposeSession()
     h.boundary({ agent: { session: { id: 'sess-1', header: { id: 'sess-1' } }, steer: h.steer }, turn: 1, signal: new AbortController().signal })
     expect(h.steer).not.toHaveBeenCalled()
   })

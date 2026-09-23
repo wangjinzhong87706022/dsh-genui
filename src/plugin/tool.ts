@@ -25,8 +25,8 @@ import {
   isRenderableProcess, processGenuiSpec,
 } from '../client/guard.ts'
 import type { GenuiProcessResult } from '../client/guard.ts'
+import { COMPONENT_SCHEMAS } from '../client/genui-runtime/schema.ts'
 import { completeFenceJson } from '../shared/fence-repair.ts'
-import { droppedNodeFailure } from './genui-diagnostic.ts'
 
 /**
  * Arguments schema: an open `spec` slot. The schema must NOT reject anything
@@ -145,34 +145,143 @@ function processRenderableValue(value: unknown): GenuiProcessResult {
   return processGenuiSpec(value)
 }
 
-/** Wrap model-facing validation fields in the stable GenUI protocol envelope. */
-function validationProtocol(lines: string[]): string {
-  return ['[genui-validation]', ...lines, 'reply_language=conversation'].join('\n')
-}
-
-/** Render process diagnostics as stable model-facing warning fields. */
+/** Render process diagnostics as stable model-facing warning lines. */
 function formatProcessWarnings(processed: GenuiProcessResult): string[] {
   return processed.warnings.map(warning => {
     if (warning.kind === 'alias' && warning.canonical !== undefined) {
       const separator = warning.path.lastIndexOf('.')
       const canonicalPath = `${separator < 0 ? '' : warning.path.slice(0, separator + 1)}${warning.canonical}`
       return warning.message.includes('ignored')
-        ? `warning=alias_ignored path=${warning.path} canonical=${canonicalPath}`
-        : `warning=alias_normalized path=${warning.path} canonical=${canonicalPath}`
+        ? `⚠️ 已忽略别名字段：${warning.path} → ${canonicalPath}（ignored because canonical field '${warning.canonical}' is present）`
+        : `⚠️ 已规范化字段：${warning.path} → ${canonicalPath}（normalized/adopted as '${warning.canonical}'）`
     }
-    return `warning=process detail=${JSON.stringify(warning.message)}`
+    return `⚠️ ${warning.message}`
   })
 }
 
 /** Format chart-specific process errors while keeping other schema errors generic. */
 function formatProcessFailure(processed: GenuiProcessResult): string | undefined {
   const chartErrors = processed.errors.filter(error => /(?:variant is unsupported|kind must be bars, line, or donut|requires data or series|(?:data|series) is required for|(?:\.data|\.series)(?:\[\d+\])?(?:\.(?:data|label|value|color))? must|series is only supported for bars)/.test(error))
-  return chartErrors.length === 0 ? undefined : validationProtocol([
-    'status=invalid',
-    'error=invalid_chart_fields',
-    ...chartErrors.map(error => `diagnostic=${JSON.stringify(error)}`),
-    'next=fix_and_revalidate',
-  ])
+  return chartErrors.length === 0 ? undefined : `❌ chart 字段验证失败：\n- ${chartErrors.join('\n- ')}`
+}
+
+/** Fields the schema knows for a node type, in a stable order (for the hint). */
+function knownFieldsOf(type: string): string[] {
+  const schema = COMPONENT_SCHEMAS[type]
+  if (schema === undefined) return []
+  return [...schema.required, ...Object.keys(schema.optional)]
+}
+
+/** `items[2]`, or `items[0].items[1]` for a node nested in a container. */
+function nodePathOf(error: string): string | null {
+  // `]` is a non-word character, so `\b` cannot terminate this pattern — the
+  // path ends at the next `.items[` or at the `:` that introduces the message.
+  const match = /^(items\[\d+\](?:\.items\[\d+\])*)(?=:|\.items\[|$)/.exec(error)
+  return match === null ? null : match[1]!
+}
+
+/**
+ * Resolve a node path against the raw value the tool was called with. The tool's schema accepts a
+ * bare component object as well as a full spec (`{items:[…]}`), so `items[0]`
+ * maps to the value itself in the bare case and to `value.items[0]` otherwise.
+ */
+function declaredNodeAt(value: unknown, path: string): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const root = value as Record<string, unknown>
+  const normalized = path.replace(/^items/, '')
+  let current: unknown = normalized === '' ? root : root.items
+  for (const step of normalized.replace(/^\./, '').split('.').filter(part => part !== '')) {
+    // The step may keep its `items` prefix (`items[1]`) or be the bare index
+    // step (`[1]`) after the leading `items` was stripped.
+    const matched = /(?:items)?\[(\d+)\]/.exec(step)
+    const index = matched === null ? Number.NaN : Number(matched[1])
+    if (!Number.isInteger(index) || !Array.isArray(current)) return undefined
+    current = current[index]
+  }
+  return typeof current === 'object' && current !== null && !Array.isArray(current)
+    ? current as Record<string, unknown>
+    : undefined
+}
+
+/** Turn `items[0].items[1].text: unknown field for 'callout'` into a readable tail. */
+function fieldSymptom(error: string, path: string, type: string): string {
+  const rest = error.slice(path.length)
+  const unknown = /^\.([A-Za-z0-9_-]+): unknown field\b/.exec(rest)
+  if (unknown !== null) {
+    const known = knownFieldsOf(type)
+    return `字段 \`${unknown[1]}\` 不是 ${type} 的字段${known.length === 0 ? '' : `（可写：${known.join(' / ')}）`}`
+  }
+  const missing = /requires ([A-Za-z0-9_-]+)/.exec(rest)
+  if (missing !== null) return `缺少必填字段 \`${missing[1]}\``
+  return rest.replace(/^:\s*/, '').slice(0, 120)
+}
+
+/** The node type named by a validation error, when the error states one. */
+function errorTypeOf(error: string): string | undefined {
+  return /type '([^']+)'/.exec(error)?.[1]
+}
+
+/**
+ * Name each dropped node and why — one compact line per component, so the
+ * model gets a per-node position, type, the fields it actually wrote, and the
+ * required fields it should have written, instead of only an aggregate count.
+ *
+ * `raw` is the declared value the process was run on (pre-normalization), so
+ * the path lookup resolves against the tree the model wrote. The raw error
+ * list is appended by the caller, so an error this summarizer cannot classify
+ * is still visible.
+ */
+function droppedNodeDiagnosis(processed: GenuiProcessResult, raw: unknown): string[] {
+  const byPath = new Map<string, string[]>()
+  for (const error of processed.errors) {
+    const path = nodePathOf(error)
+    if (path === null) continue
+    const bucket = byPath.get(path)
+    if (bucket === undefined) byPath.set(path, [error])
+    else bucket.push(error)
+  }
+  const lines: string[] = []
+  for (const [path, errors] of byPath) {
+    const node = declaredNodeAt(raw, path)
+    // The type is authoritative from the node when it resolves, otherwise from
+    // the error text ("type 'table' requires …") — validation runs on the
+    // normalized value, whose path layout can differ from the raw one.
+    const type = (typeof node?.type === 'string' ? node.type : undefined)
+      ?? errors.map(errorTypeOf).find(candidate => candidate !== undefined)
+    // A node is dropped only when repair could not produce ANY node of that
+    // type (duplicate types collapse into one report line rather than a
+    // false positive on a shifted index).
+    if (type !== undefined && repairedContainsType(processed.repaired, type)) continue
+    const label = type ?? '未知类型'
+    const emitted = node === undefined ? [] : Object.keys(node).filter(key => key !== 'type')
+    const symptoms = [...new Set(errors.map(error => fieldSymptom(error, path, label)))]
+    const wrote = emitted.length === 0 ? '' : `；已写字段 ${emitted.join(' / ')}`
+    lines.push(`${path}（${label}）${symptoms.join('；')}${wrote}`)
+  }
+  return lines
+}
+
+/** Does the repaired tree contain any native node of this type? */
+function repairedContainsType(node: unknown, type: string): boolean {
+  if (Array.isArray(node)) return node.some(child => repairedContainsType(child, type))
+  if (typeof node !== 'object' || node === null) return false
+  const record = node as Record<string, unknown>
+  if (record.type === type) return true
+  return Object.values(record).some(child => repairedContainsType(child, type))
+}
+
+/** Report dropped components without hiding their actionable field errors.
+ *  Exported for the fence feedback loop (#160), so a steered correction quotes
+ *  exactly what the validator tool reports. */
+export function droppedNodeFailure(processed: GenuiProcessResult, raw: unknown): string | undefined {
+  if (!processed.errors.some(error => error.startsWith('repair dropped '))) return undefined
+  const dropped = processed.declaredNativeCount - processed.renderedNativeCount
+  const diagnosis = droppedNodeDiagnosis(processed, raw)
+  const head = `❌ 验证未通过：声明了 ${processed.declaredNativeCount} 个组件，仅解析出 ${processed.renderedNativeCount} 个（${dropped} 个被丢弃）。`
+  const detail = diagnosis.length === 0
+    ? `\n- ${processed.errors.join('\n- ')}`
+    : `\n被丢弃的节点：\n- ${diagnosis.join('\n- ')}\n原始诊断：\n- ${processed.errors.join('\n- ')}`
+  return `${head}${detail}\n请修正后重新验证。`
 }
 
 /** Tool-call title shared by the pending and completed presentations. */
@@ -210,22 +319,16 @@ export function createRenderUiTool(): ToolDefinition {
     async execute(args: unknown): Promise<JsonValue> {
       const processed = processRenderableValue(specOf(args))
       if (processed.spec === null) {
-        return ['[genui-render]', 'status=invalid', 'error=invalid_spec', 'required=items', 'next=fix_and_retry', 'reply_language=conversation'].join('\n')
+        return 'render_ui：spec 无效 —— 根对象需要 "items" 数组（组件树白名单见系统提示词），请修正后重试。'
       }
       if (!isRenderableProcess(processed)) {
         throw new Error('render_ui spec invalid: ' + processed.errors.join('; '))
       }
       const spec = processed.spec
+      const title = spec.title ?? '未命名'
       const warnings = formatProcessWarnings(processed)
-      return [
-        '[genui-render]',
-        'status=rendered',
-        ...(spec.title === undefined ? [] : [`title=${JSON.stringify(spec.title)}`]),
-        `rendered=${processed.renderedCount}`,
-        'action_feedback=[genui-action]',
-        ...warnings,
-        'reply_language=conversation',
-      ].join('\n')
+      const warningText = warnings.length === 0 ? '' : `\n${warnings.join('\n')}`
+      return `已渲染 UI「${title}」（${processed.renderedCount} 个组件）。用户现在可以看到这张卡片；组件带 action 时，用户交互会以 [genui-action] 消息发回给你，届时请重新渲染更新后的界面。${warningText}`
     },
     presentCall(args: unknown): GenericCallView | undefined {
       const title = cardTitle(args)
@@ -250,8 +353,8 @@ export function createRenderUiTool(): ToolDefinition {
 const VALIDATE_DESCRIPTION =
   'Validate the JSON body of a ```dsh-ui fence BEFORE emitting it — use for non-trivial specs (≥3 nodes or containing a table); skip for trivial ones (≤2 nodes). '
   + 'Pass the exact JSON text you are about to put inside the fence as the "spec" argument (a string). '
-  + 'Returns a [genui-validation] protocol block with status, diagnostics, next action, and reply_language=conversation. '
-  + 'When invalid JSON is repairable, next=emit_repaired_fence and repaired_json contain the exact fence body to emit.'
+  + 'Returns ✅ when it parses as a valid GenUI spec, or ❌ with the exact position, bracket counts, and likely causes when it does not — fix the JSON, re-validate, and only then emit the fence. '
+  + 'When the JSON is broken but repairable (unescaped quotes, trailing commas, missing closers), the ❌ reply INCLUDES the auto-repaired JSON — copy it verbatim into the fence instead of rewriting by hand.'
 
 const VALIDATE_PARAMETERS: Record<string, unknown> = {
   type: 'object',
@@ -307,22 +410,23 @@ function bracketCounts(raw: string): { '{': number; '}': number; '[': number; ']
   return counts
 }
 
-/** Return stable structural count fields for an invalid JSON body. */
-function bracketDiagnostic(raw: string): string[] {
+/** Short structural hint from bracket counts (empty when balanced). */
+function bracketDiagnostic(raw: string): string {
   const c = bracketCounts(raw)
-  const fields = [`braces_open=${c['{']}`, `braces_close=${c['}']}`, `brackets_open=${c['[']}`, `brackets_close=${c[']']}`]
+  const diffs: string[] = []
   if (c['{'] !== c['}']) {
     const d = c['{'] - c['}']
-    fields.push(`brace_delta=${d}`, `brace_action=${d > 0 ? `add:${d}` : `remove:${-d}`}`)
+    diffs.push(`{ ×${c['{']} / } ×${c['}']} → ${d > 0 ? `缺 ${d} 个 }` : `多 ${-d} 个 }`}`)
   }
   if (c['['] !== c[']']) {
     const d = c['['] - c[']']
-    fields.push(`bracket_delta=${d}`, `bracket_action=${d > 0 ? `add:${d}` : `remove:${-d}`}`)
+    diffs.push(`[ ×${c['[']} / ] ×${c[']']} → ${d > 0 ? `缺 ${d} 个 ]` : `多 ${-d} 个 ]`}`)
   }
-  return fields
+  return diffs.length === 0 ? '' : `  括号计数：${diffs.join('；')}（长表格最易在收尾处错位，如把 ]]}]} 写成 ]}]}]}）\n`
 }
 
-const COMMON_CAUSES = 'likely_causes=unbalanced_delimiters,unescaped_quote,trailing_comma,unterminated_string'
+const COMMON_CAUSES =
+  '常见原因：① 收尾括号错位/缺失（{ 与 }、[ 与 ] 数量不相等）② 字符串值内用了半角引号 "（中文引语请用 “” 或 「」）③ 尾随逗号 ④ 字符串未闭合'
 
 /** Build the validate_dsh_ui tool definition (registered alongside render_ui). */
 export function createValidateDshUiTool(): ToolDefinition {
@@ -339,7 +443,7 @@ export function createValidateDshUiTool(): ToolDefinition {
     async execute(args: unknown): Promise<JsonValue> {
       const raw = fenceTextOf(args)
       if (raw === null || raw.trim() === '') {
-        return validationProtocol(['status=invalid', 'error=missing_spec', 'next=provide_spec'])
+        return '❌ validate_dsh_ui：缺少 spec 参数 —— 把围栏 JSON 文本作为 spec 传入。'
       }
       let parsed: unknown
       try {
@@ -358,46 +462,21 @@ export function createValidateDshUiTool(): ToolDefinition {
           if (chartFailure !== undefined) return chartFailure
           if (processed.spec !== null && processed.errors.length === 0) {
             const warnings = formatProcessWarnings(processed)
-            return `${validationProtocol([
-              'status=invalid',
-              'error=invalid_json',
-              `detail=${JSON.stringify(detail)}`,
-              ...bracketDiagnostic(raw),
-              ...warnings,
-              'repair=applied',
-              `repair_count=${repaired.repairs}`,
-              'next=emit_repaired_fence',
-            ])}\nrepaired_json:\n\`\`\`\n${repaired.text}\n\`\`\``
+            const warningText = warnings.length === 0 ? '' : `${warnings.join('\n')}\n`
+            return `❌ dsh-ui 围栏 JSON 解析失败：${detail}。\n${bracketDiagnostic(raw)}${warningText}  已自动修复 ${repaired.repairs} 处，下面是修复后的 JSON，直接作为围栏正文发出即可（无需再验证）：\n\`\`\`\n${repaired.text}\n\`\`\``
           }
         }
-        return validationProtocol([
-          'status=invalid',
-          'error=invalid_json',
-          `detail=${JSON.stringify(detail)}`,
-          ...bracketDiagnostic(raw),
-          'repair=failed',
-          COMMON_CAUSES,
-          'next=fix_and_revalidate',
-        ])
+        return `❌ dsh-ui 围栏 JSON 解析失败：${detail}。\n${bracketDiagnostic(raw)}  自动修复未能恢复（结构损坏），请按错误信息修正后重新调用本工具验证，通过后再发出围栏。\n${COMMON_CAUSES}`
       }
       const processed = processRenderableValue(parsed)
       const chartFailure = formatProcessFailure(processed)
       if (chartFailure !== undefined) return chartFailure
       if (processed.spec === null || processed.errors.length > 0) {
-        const dropped = droppedNodeFailure(processed, parsed)
-        return dropped === undefined
-          ? validationProtocol([
-            'status=invalid',
-            'error=invalid_spec',
-            ...(processed.errors.length === 0
-              ? ['required=items', 'node_types=whitelist']
-              : processed.errors.map(error => `diagnostic=${JSON.stringify(error)}`)),
-            'next=fix_and_revalidate',
-          ])
-          : validationProtocol(['status=invalid', ...dropped, 'next=fix_and_revalidate'])
+        return droppedNodeFailure(processed, parsed)
+          ?? `❌ 不是合法 GenUI spec：${processed.errors.join('；') || '根对象需要 "items" 数组，且每个节点 type 必须在白名单内（见系统提示词）'}。请修正后重新验证。`
       }
       const warnings = formatProcessWarnings(processed)
-      return validationProtocol(['status=valid', `rendered=${processed.renderedCount}`, ...warnings, 'next=emit_fence'])
+      return [`✅ dsh-ui spec 合法（${processed.renderedCount} 个组件），可以发出围栏。`, ...warnings].join('\n')
     },
     presentCall(): GenericCallView | undefined {
       return { card: 'generic', title: '验证 dsh-ui 围栏', kind: 'other' }

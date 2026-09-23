@@ -3,6 +3,7 @@ import { createElement, useLayoutEffect, useRef, type ReactNode } from 'react'
 import katex from 'katex'
 import css from './GenuiBlock.module.css'
 import { safeHref } from './genui-runtime/value-utils.ts'
+import { openCitationPopover } from './citation-store.ts'
 
 /** KaTeX owns this span's children; React owns the span and its lifecycle.
  * The host's ui-primitives already supplies KaTeX CSS/fonts, including embeds. */
@@ -23,7 +24,7 @@ function InlineMath({ source, display }: { source: string; display: boolean }) {
 // A real newline in the string is its own token rendered as <br>, so text
 // fields express a line break via JSON "\n" — no HTML parsing, and the
 // single-line (nowrap) chrome classes never contain one.
-const INLINE = /`[^`\n]+`|\\\\|\\\$|(?<![\\$])\$\$(?:\\.|[^\\])*?\$\$|\\\[(?:\\(?!\])[^]|[^\\])*?\\\]|\\\((?:\\(?!\))[^]|[^\\])*?\\\)|(?<![\\$])\$(?!\s|\$)(?:\\.|[^$\\\n])+(?<!\s)\$(?!\d|\$)|\*\*[\s\S]+?\*\*|==[\s\S]+?==|\[[^\]\n]+\]\([^)\s]+\)|\r?\n/g
+const INLINE = /`[^`\n]+`|\\\\|\\\$|(?<![\\$])\$\$(?:\\.|[^\\])*?\$\$|\\\[(?:\\(?!\])[^]|[^\\])*?\\\]|\\\((?:\\(?!\))[^]|[^\\])*?\\\)|(?<![\\$])\$(?!\s|\$)(?:\\.|[^$\\\n])+(?<!\s)\$(?!\d|\$)|\*\*[\s\S]+?\*\*|==[\s\S]+?==|\[\[(?:ID:)?\d{1,3}\]\]|\[ID:\d{1,3}\]|\[[^\]\n]+\]\([^)\s]+\)|\r?\n/g
 
 export function hasInlineMarkup(text: string): boolean {
   return typeof text === 'string' && /[`*=$\\\n\r]|\[/.test(text)
@@ -56,6 +57,18 @@ export function renderInline(text: string, allowLinks = true, depth = 0): ReactN
       out.push(createElement(bold ? 'strong' : 'mark', {
         key: key++, className: bold ? css.inlineStrong : css.inlineMark,
       }, renderInline(token.slice(2, -2), allowLinks, depth + 1)))
+    } else if (token.startsWith('[[') || token.startsWith('[ID:')) {
+      // Inline citation marker `[[N]]` or `[ID:N]` (RAGFlow format) — teal
+      // superscript chip opening the popover registered by a sibling
+      // `citations` node; falls back to a plain chip when unregistered.
+      const raw = token.startsWith('[[') ? token.slice(2, -2) : token.slice(4, -2);
+      const n = parseInt(raw, 10);
+      out.push(createElement('sup', {
+        key: key++,
+        className: css.citeBadge,
+        'data-cite': n,
+        onClick: (event: { currentTarget: HTMLElement }) => openCitationPopover(n, event.currentTarget),
+      }, `[${n}]`))
     } else {
       const parts = /^\[([^\]\n]+)\]\(([^)\s]+)\)$/.exec(token)
       if (parts === null) {
