@@ -239,3 +239,22 @@ describe('automatic quote-escape repair', () => {
     expect(screen.queryByRole('note')).toBeNull()
   })
 })
+
+describe('stray paren repair (template transcription slip, 2026-09-24)', () => {
+  // 真实案例：模型抄长模板时把 `}}` 写成 `})`，并带出乱码字体值——
+  // 括号在 JSON 中非法，删除后整体可解析即静默修复渲染。
+  const STRAY_PAREN =
+    '{"title":"x","items":[{"type":"echart","preset":"tree","tree":{"data":[{"name":"r","children":[{"name":"a"})]}]}}]}'
+
+  it('drops the stray paren once settled and renders the chart', () => {
+    render(<div>{renderGenuiFence(STRAY_PAREN, 'tp1', { source: { id: 's', order: [1, 0, 0] } })}</div>)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByRole('note')).toBeNull()
+  })
+
+  it('never applies paren repair while streaming', () => {
+    render(<div data-streaming="true">{renderGenuiFence(STRAY_PAREN, 'tp2')}</div>)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.body.textContent).toContain('preset')
+  })
+})

@@ -21,7 +21,7 @@ import type { GenuiEChart } from './spec.ts'
 
 /** Which engine bundle this node needs (progressive disclosure). */
 function neededEngine(node: GenuiEChart): 'core' | 'full' {
-  if (node.option !== undefined) return 'full'
+  if (node.option !== undefined || node.tree !== undefined) return 'full'
   return CORE_PRESETS.has(node.preset ?? 'bar') ? 'core' : 'full'
 }
 
@@ -363,6 +363,26 @@ function presetOption(node: GenuiEChart, el?: HTMLElement | null): Record<string
         legend: series !== undefined ? { bottom: 26, textStyle: { color: t.labelTertiary } } : undefined,
       }
     }
+    case 'tree': {
+      // Styled tree from nested `tree.data` — the model writes CONTENT only;
+      // palette/roam/emphasis/toolbox live here so long-template transcription
+      // (the JSON-corruption source) never reaches the model.
+      const data = node.tree?.data ?? []
+      return {
+        tooltip: { trigger: 'item', triggerOn: 'mousemove' },
+        toolbox: { show: true, feature: { saveAsImage: {} }, right: 10, top: 2 },
+        series: [{
+          type: 'tree', data, roam: true, initialTreeDepth: -1, orient: 'LR',
+          left: 16, right: 200, top: 10, bottom: 10, symbol: 'circle', symbolSize: 12,
+          itemStyle: { color: '#5b8ff9', borderColor: '#5b8ff9', borderWidth: 2 },
+          lineStyle: { color: '#b8c6dd', width: 1.5, curveness: 0.45 },
+          label: { position: 'left', fontSize: 13, color: '#47607c', distance: 6 },
+          leaves: { symbolSize: 9, itemStyle: { color: '#5ad8a6' }, label: { position: 'right', fontSize: 13, color: '#2e7d5b' } },
+          emphasis: { focus: 'descendant', lineStyle: { width: 2.5 }, itemStyle: { color: '#f6bd16', borderColor: '#f6bd16' } },
+          animationDuration: 400,
+        }],
+      }
+    }
     default: {
       // 'bar' or unspecified
       return {
@@ -472,6 +492,12 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
     // Full `option` wins over preset shorthand.
     const option = node.option ?? presetOption(node, el)
     const drillKey = node.drill?.key
+    if (drillKey !== undefined) {
+      // Drill charts: single click = drill intent. Disable echarts' own
+      // expand/collapse so a browsing click can never double as a drill.
+      const series = (option as { series?: Array<Record<string, unknown>> }).series?.[0]
+      if (series !== undefined) series.expandAndCollapse = false
+    }
 
     void lazyCreateChart(el, option, { height: node.height ?? 300 }, neededEngine(node)).then((inst) => {
       if (!alive) {
@@ -548,10 +574,15 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
       }
       if (drillKey !== undefined) {
         drillRegistry.set(drillKey, { merge })
+        // Mutable tree data source: raw `option` charts read series[0].data;
+        // preset:'tree' charts read node.tree.data (styled option built below).
         const series0 = (node.option as { series?: Array<{ data?: unknown }> } | undefined)?.series?.[0]
         if (Array.isArray(series0?.data)) {
           treeDataRef.current = cloneTreeData(series0.data as DrillTreeNode[])
           baseOptionRef.current = structuredClone(node.option) as Record<string, unknown>
+        } else if (node.tree !== undefined && Array.isArray(node.tree.data)) {
+          treeDataRef.current = cloneTreeData(node.tree.data as DrillTreeNode[])
+          baseOptionRef.current = presetOption(node, el) as Record<string, unknown>
         }
       }
 

@@ -18,7 +18,7 @@
  * - The whole spec carries a node budget; once exhausted, remaining siblings
  *   are elided.
  */
-import type { GenuiFileTreeNode, GenuiList, GenuiNode, GenuiPlot, GenuiPlotSeries, GenuiScene3D, GenuiSpec, GenuiDiagram, GenuiDiagramTheme, GenuiDiagramKind, GenuiCitation } from './spec.ts'
+import type { GenuiFileTreeNode, GenuiList, GenuiNode, GenuiPlot, GenuiPlotSeries, GenuiScene3D, GenuiSpec, GenuiDiagram, GenuiDiagramTheme, GenuiDiagramKind, GenuiCitation, GenuiTreeNode } from './spec.ts'
 import { isComponentRoot, wrapSingleComponentRoot } from './spec.ts'
 import {
   BADGE_TONES, BUTTON_TONES, CALLOUT_TONES, CARD_TONES, CHART_KINDS, COMPONENT_SCHEMAS, HERO_TONES,
@@ -727,10 +727,18 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
         const nodes = (children as { nodes?: unknown[] }).nodes
         return { key, target, children: Array.isArray(nodes) ? nodes : [] }
       })()
-      // At least one of preset+data, links, option or drillPatch must be
+      // Preset 'tree' payload: nested content nodes, style lives in the renderer.
+      const tree = (() => {
+        const t = obj(v.tree)
+        if (t === undefined || !Array.isArray(t.data)) return undefined
+        const sanitized = sanitizeEChartOption({ nodes: t.data }, 0, { count: GENUI_LIMITS.maxEChartOptionNodes })
+        const nodes = (sanitized as { nodes?: unknown[] } | undefined)?.nodes
+        return Array.isArray(nodes) && nodes.length > 0 ? { data: nodes as GenuiTreeNode[] } : undefined
+      })()
+      // At least one of preset+data, links, option, drillPatch or tree must be
       // present — a patch fence carries ONLY drillPatch by design.
       if (option === undefined && data === undefined && series === undefined
-        && (links === undefined || links.length === 0) && drillPatch === undefined) return null
+        && (links === undefined || links.length === 0) && drillPatch === undefined && tree === undefined) return null
       return {
         type: 'echart',
         ...opt('title', str(v.title, GENUI_LIMITS.maxString)),
@@ -745,6 +753,7 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
         ...opt('actionTemplate', str(v.actionTemplate, 200)),
         ...opt('drill', drill),
         ...opt('drillPatch', drillPatch),
+        ...opt('tree', tree),
         ...(v.actionTemplate !== undefined
           ? (() => { const k = globalThis as unknown as Record<string, unknown>; k.__genuiGuardATOut = (Number(k.__genuiGuardATOut) || 0) + 1; return {} })()
           : {}),
@@ -2114,12 +2123,14 @@ function validateNode(value: unknown, depth: number, at: string, errors: string[
     case 'echart':
       // `links` alone is a valid payload: the sankey/graph presets are driven
       // by edges only. `drillPatch` alone is valid too: the drill answer
-      // merges into the originally registered chart. Missing both here
-      // rejected the whole fence as un-renderable (the render gate turns any
-      // error into "render nothing").
+      // merges into the originally registered chart. `tree` alone is valid:
+      // the tree preset builds the styled option from nested nodes. Missing
+      // all of them here rejected the whole fence as un-renderable (the
+      // render gate turns any error into "render nothing").
       if (v.option === undefined && v.data === undefined && v.series === undefined
-        && (!Array.isArray(v.links) || v.links.length === 0) && v.drillPatch === undefined) {
-        errors.push(`${at}: type 'echart' requires option, data, series, links, or drillPatch`)
+        && (!Array.isArray(v.links) || v.links.length === 0)
+        && v.drillPatch === undefined && v.tree === undefined) {
+        errors.push(`${at}: type 'echart' requires option, data, series, links, drillPatch, or tree`)
       }
       isNum('height')
       break

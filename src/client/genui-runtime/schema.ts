@@ -81,7 +81,7 @@ export const DIAGRAM_EDGE_KINDS = ['solid', 'dashed', 'accent', 'link'] as const
 export const DIAGRAM_ROUTES = ['auto', 'orthogonal', 'straight'] as const
 export const ECHART_PRESETS = [
   'bar', 'line', 'area', 'pie', 'scatter',
-  'radar', 'gauge', 'funnel', 'treemap', 'sankey', 'graph', 'heatmap', 'bigline', 'wordCloud',
+  'radar', 'gauge', 'funnel', 'treemap', 'sankey', 'graph', 'heatmap', 'bigline', 'wordCloud', 'tree',
 ] as const
 /** Oversized single-number stat (one per fence as the visual anchor). */
 export const STAT_SIZES = ['hero'] as const
@@ -329,10 +329,11 @@ export const COMPONENT_SCHEMAS: Readonly<Record<string, ComponentSchema>> = {
   // reach for it here too; without the alias the whole node (and fence) drops.
   diff: schema(['diffs'], { ...nodeFields, diffs: 'array' }, { items: 'diffs', files: 'diffs' }, { nested: { diffs: diffRecordSchema } }),
   divider: schema([], nodeFields),
-  echart: schema([], { ...nodeFields, title: 'string', height: 'number', preset: 'string', data: 'array', series: 'array', links: 'array', palette: 'array', option: 'object', actionTemplate: 'string', drill: 'object', drillPatch: 'object' }, {}, {
+  echart: schema([], { ...nodeFields, title: 'string', height: 'number', preset: 'string', data: 'array', series: 'array', links: 'array', palette: 'array', option: 'object', actionTemplate: 'string', drill: 'object', drillPatch: 'object', tree: 'object' }, {}, {
     // `links` alone is valid: the sankey/graph presets are edge-driven;
-    // `drillPatch` alone is valid: the drill answer merges into the original chart.
-    oneOfRequired: [['option', 'data', 'series', 'links', 'drillPatch']],
+    // `drillPatch` alone is valid: the drill answer merges into the original chart;
+    // `tree` alone is valid: the tree preset builds the styled option from nested nodes.
+    oneOfRequired: [['option', 'data', 'series', 'links', 'drillPatch', 'tree']],
     enums: { preset: ECHART_PRESETS },
   }),
   'file-tree': schema(['items'], { ...nodeFields, items: 'array' }, { nodes: 'items' }, { nested: { items: fileTreeNodeSchema } }),

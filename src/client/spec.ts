@@ -812,6 +812,7 @@ export interface GenuiCitations {
 export type EChartPreset =
   | 'bar' | 'line' | 'area' | 'pie' | 'scatter'
   | 'radar' | 'gauge' | 'funnel' | 'treemap' | 'sankey' | 'graph' | 'heatmap' | 'bigline' | 'wordCloud'
+  | 'tree'
 
 /** ECharts node: renders a full ECharts chart. Two modes:
  *
@@ -862,6 +863,18 @@ export interface GenuiEChart {
    * a small merged note — the full tree stays in the original message. When
    * the original chart is gone, the patch renders as a standalone subtree. */
   drillPatch?: { key: string; target: string; children: unknown[] }
+  /** Preset 'tree' payload: nested nodes. The renderer builds the fully
+   * styled tree option (palette/roam/emphasis/toolbox) — the model supplies
+   * CONTENT only, never style boilerplate (that transcription is where JSON
+   * corruption comes from). */
+  tree?: { data: GenuiTreeNode[] }
+}
+
+/** A node of the `tree` preset's nested payload. */
+export interface GenuiTreeNode {
+  name: string
+  children?: GenuiTreeNode[]
+  [k: string]: unknown
 }
 
 /** Parse the raw fence body as a GenuiSpec, or null when it is not one. */

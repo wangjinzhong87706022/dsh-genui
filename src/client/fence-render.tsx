@@ -26,7 +26,7 @@ import { fenceStateKey } from './interaction-store.ts'
 import { parsePartialGenuiSpec } from './parse-partial.ts'
 import { applyPanelOperation, diagnosePanelBudget, type PanelOperationStatus } from './panel-store.ts'
 import type { GenuiSpec } from './spec.ts'
-import { completeFenceJson, describeJsonFailure, isCompleteJson, repairFenceJson, stripUndefinedLiterals } from '../shared/fence-repair.ts'
+import { completeFenceJson, describeJsonFailure, isCompleteJson, removeStrayClosers, repairFenceJson, stripUndefinedLiterals } from '../shared/fence-repair.ts'
 
 /** Settled fence source identity (data shape, host-independent). */
 export interface GenuiFenceSource {
@@ -209,6 +209,17 @@ export function resolveGenuiSpec(raw: string, context?: GenuiFenceContext): Genu
       spec = reparsed === null ? null : repairRenderableSpec(reparsed)
     }
     if (spec === null && context?.source !== undefined) {
+      // Stray-closer pass: a `)` mistyped for `}` (or any paren) while the
+      // model transcribes a long template — drop characters that cannot
+      // legally appear at their position and re-parse. SETTLED MESSAGES ONLY
+      // (a streaming half must never be "repaired" into a finished render).
+      const unstrayed = removeStrayClosers(body)
+      if (unstrayed !== null) {
+        const reparsed = parsePartialGenuiSpec(unstrayed.text)
+        spec = reparsed === null ? null : repairRenderableSpec(reparsed)
+      }
+    }
+    if (spec === null && context?.source !== undefined) {
       const completed = completeFenceJson(body)
       if (completed !== null) {
         const reparsed = parsePartialGenuiSpec(completed.text)
@@ -285,7 +296,10 @@ export function renderResolvedFenceNode(raw: string, key: Key, context?: GenuiFe
  */
 export function renderGenuiFence(raw: string, key: Key, context?: GenuiFenceContext): ReactNode {
   const spec = resolveGenuiSpec(raw, context)
-  if (spec === null) return <FenceFallback key={key} fenceKey={key} raw={raw} />
+  if (spec === null) {
+    console.log('[drill-debug] FALLBACK raw head:', raw.slice(0, 70))
+    return <FenceFallback key={key} fenceKey={key} raw={raw} />
+  }
   if (spec.panel === true) {
     if (context !== undefined && context.sessionId !== undefined && context.source !== undefined) {
       if (spec.append === true && !isCompleteJson(raw)) return null

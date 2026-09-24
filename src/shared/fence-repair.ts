@@ -150,6 +150,35 @@ export function repairFenceJson(raw: string): { text: string; repairs: number } 
 }
 
 /**
+ * Tier-2 repair — remove parentheses a model mistypes while transcribing a
+ * long template (`})` where `}}` was meant): JSON has no parentheses at all,
+ * so every paren OUTSIDE a string is a stray character. Deliberately does NOT
+ * touch `}`/`]` (mismatched closers are tier-2's own job) and adopts only
+ * when the whole body parses. SETTLED MESSAGES ONLY.
+ */
+export function removeStrayClosers(raw: string): { text: string; repairs: number } | null {
+  let out = ''
+  let repairs = 0
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!
+    if (escaped) { out += ch; escaped = false; continue }
+    if (inString && ch === '\\') { out += ch; escaped = true; continue }
+    if (ch === '"') { inString = !inString; out += ch; continue }
+    if (!inString && (ch === '(' || ch === ')')) { repairs++; continue } // parens never belong in JSON
+    out += ch
+  }
+  if (repairs === 0) return null
+  try {
+    JSON.parse(out)
+    return { text: out, repairs }
+  } catch {
+    return null
+  }
+}
+
+/**
  * Rewrite the "Tetris table" shape into legal JSON: the model closed the
  * `columns` array after the header cells and then wrote the row matrix as a
  * SIBLING array element —
