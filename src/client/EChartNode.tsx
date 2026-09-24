@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react'
 import css from './GenuiBlock.module.css'
 import { CORE_PRESETS, createChart as lazyCreateChart, type EChartsInstance } from './echarts-lazy.ts'
 import { CHART_COLORS } from './blocks/charts.tsx'
+import { useGenuiAction } from './action-context.ts'
 import type { GenuiEChart } from './spec.ts'
 
 /** Which engine bundle this node needs (progressive disclosure). */
@@ -388,18 +389,89 @@ function optItemStyleColor(color: string | undefined, _i: number, _series: unkno
   return color !== undefined ? { itemStyle: { color } } : {}
 }
 
+/* ── Drill-down: registry, tree helpers, serial-queue machinery ─────────── */
+
+interface DrillTreeNode { name?: unknown; children?: DrillTreeNode[]; [k: string]: unknown }
+
+/** Per-page registry: drill.key → merge fn of the still-mounted drill chart.
+ * Patch fences in later messages look their target chart up here. */
+const drillRegistry = new Map<string, { merge: (target: string, children: unknown[]) => boolean }>()
+
+const DRILL_TIMEOUT_MS = 90_000
+const DRILL_QUEUE_MAX = 3
+const PLACEHOLDER_PREFIX = '⏳'
+
+function findTreeNode(data: DrillTreeNode[], name: string): DrillTreeNode | undefined {
+  for (const node of data) {
+    if (String(node.name ?? '') === name) return node
+    const hit = node.children !== undefined ? findTreeNode(node.children, name) : undefined
+    if (hit !== undefined) return hit
+  }
+  return undefined
+}
+
+function cloneTreeData(data: DrillTreeNode[]): DrillTreeNode[] {
+  return structuredClone(data) as DrillTreeNode[]
+}
+
 export function EChartNode({ node }: { node: GenuiEChart }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const instanceRef = useRef<EChartsInstance | null>(null)
+  // Click-to-action bridge (`actionTemplate`): read through a ref so the
+  // mount-time click binding always relays through the latest handler.
+  const onAction = useGenuiAction()
+  const onActionRef = useRef(onAction)
+  onActionRef.current = onAction
+
+  // Drill state (only when node.drill is set): optimistic placeholder, single
+  // flight with a visible cancelable serial queue, and patch merging.
+  const [drillQueue, setDrillQueue] = useState<string[]>([])
+  const [mergedNote, setMergedNote] = useState<string | null>(null)
+  const queueRef = useRef<string[]>([])
+  const inflightRef = useRef<string | null>(null)
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const treeDataRef = useRef<DrillTreeNode[] | null>(null)
+  const baseOptionRef = useRef<Record<string, unknown> | null>(null)
 
   useEffect(() => {
     let alive = true
     const el = ref.current
     if (el === null) return
+    const knobs = globalThis as unknown as Record<string, unknown>
+    const bump = (k: string): void => { knobs[k] = (Number(knobs[k]) || 0) + 1 }
+
+    // Drill ANSWER (patch fence): merge into the registered chart and render
+    // only a small note. Falls back to a standalone subtree chart when the
+    // original chart is no longer mounted (unmounted/scrolled-out message).
+    if (node.drillPatch !== undefined) {
+      bump('__genuiPatchArrivals')
+      const reg = drillRegistry.get(node.drillPatch.key)
+      if (reg !== undefined && reg.merge(node.drillPatch.target, node.drillPatch.children ?? [])) {
+        bump('__genuiMerges')
+        setMergedNote(`✅ 已展开「${node.drillPatch.target}」并并入上图`)
+        return
+      }
+      const fallbackOption: Record<string, unknown> = {
+        tooltip: { trigger: 'item' },
+        series: [{
+          type: 'tree', roam: true, initialTreeDepth: -1, orient: 'LR',
+          left: 16, right: 160, top: 10, bottom: 10,
+          label: { position: 'left', fontSize: 13 }, leaves: { label: { position: 'right', fontSize: 13 } },
+          data: [{ name: node.drillPatch.target, children: node.drillPatch.children ?? [] }],
+        }],
+      }
+      void lazyCreateChart(el, fallbackOption, { height: node.height ?? 300 }, 'full').then((inst) => {
+        if (!alive) { inst.dispose(); return }
+        instanceRef.current = inst
+        setStatus('ready')
+      }).catch(() => { if (alive) setStatus('error') })
+      return () => { alive = false; instanceRef.current?.dispose(); instanceRef.current = null }
+    }
 
     // Full `option` wins over preset shorthand.
     const option = node.option ?? presetOption(node, el)
+    const drillKey = node.drill?.key
 
     void lazyCreateChart(el, option, { height: node.height ?? 300 }, neededEngine(node)).then((inst) => {
       if (!alive) {
@@ -407,6 +479,116 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
         return
       }
       instanceRef.current = inst
+      bump('__genuiEchartMounts')
+      if (node.actionTemplate !== undefined) bump('__genuiMountAT')
+
+      const applyTree = (): void => {
+        if (instanceRef.current === null || baseOptionRef.current === null || treeDataRef.current === null) return
+        const base = baseOptionRef.current
+        const series = (base.series as Array<{ data?: unknown }>)[0]
+        if (series !== undefined) series.data = treeDataRef.current
+        instanceRef.current.setOption(base)
+      }
+      const dispatchDrill = (name: string): void => {
+        inflightRef.current = name
+        const data = treeDataRef.current
+        const target = data === null ? undefined : findTreeNode(data, name)
+        if (data !== null && target !== undefined) {
+          target.children = target.children ?? []
+          target.children.push({
+            name: `${PLACEHOLDER_PREFIX} 查询中…`,
+            itemStyle: { color: '#9aa3b2', borderColor: '#9aa3b2' },
+            label: { color: '#9aa3b2' },
+          })
+          bump('__genuiPlaceholders')
+          applyTree()
+        }
+        bump('__genuiActions')
+        onActionRef.current?.(`下钻模型：${name}`, { type: 'echart-click', name })
+        timeoutRef.current = setTimeout(() => {
+          if (inflightRef.current !== name) return
+          inflightRef.current = null
+          const d = treeDataRef.current
+          const t = d === null ? undefined : findTreeNode(d, name)
+          if (t?.children !== undefined) {
+            t.children = t.children.filter(c => !String(c.name ?? '').startsWith(PLACEHOLDER_PREFIX))
+            applyTree()
+          }
+          const next = queueRef.current.shift()
+          setDrillQueue([...queueRef.current])
+          if (next !== undefined) dispatchDrill(next)
+        }, DRILL_TIMEOUT_MS)
+      }
+      const merge = (target: string, children: unknown[]): boolean => {
+        const data = treeDataRef.current
+        if (data === null) return false
+        const targetNode = findTreeNode(data, target)
+        if (targetNode === undefined) return false
+        if (targetNode.children !== undefined) {
+          targetNode.children = targetNode.children.filter(c => !String(c.name ?? '').startsWith(PLACEHOLDER_PREFIX))
+        }
+        targetNode.children = targetNode.children ?? []
+        const existing = new Set(targetNode.children.map(c => String(c.name ?? '')))
+        for (const child of children ?? []) {
+          if (child === null || typeof child !== 'object') continue
+          const name = String((child as DrillTreeNode).name ?? '')
+          if (name === '' || existing.has(name)) continue
+          targetNode.children.push(child as DrillTreeNode)
+          existing.add(name)
+        }
+        applyTree()
+        if (inflightRef.current === target) {
+          inflightRef.current = null
+          if (timeoutRef.current !== null) { clearTimeout(timeoutRef.current); timeoutRef.current = null }
+          const next = queueRef.current.shift()
+          setDrillQueue([...queueRef.current])
+          if (next !== undefined) dispatchDrill(next)
+        }
+        return true
+      }
+      if (drillKey !== undefined) {
+        drillRegistry.set(drillKey, { merge })
+        const series0 = (node.option as { series?: Array<{ data?: unknown }> } | undefined)?.series?.[0]
+        if (Array.isArray(series0?.data)) {
+          treeDataRef.current = cloneTreeData(series0.data as DrillTreeNode[])
+          baseOptionRef.current = structuredClone(node.option) as Record<string, unknown>
+        }
+      }
+
+      // Chart-click → [genui-action]: `{name}` in the template is replaced by
+      // the hit node's name; empty names (canvas background) are ignored.
+      // Drill charts get a default template — model adherence on a second
+      // copied field is flaky, and drill alone is enough to opt into clicking.
+      // Counter knobs (__genuiBinds/__genuiClicks/__genuiActions/...) exist
+      // for E2E diagnosis of the chain: bind → hit → action → queue → merge.
+      const template = node.actionTemplate ?? (drillKey !== undefined ? '下钻模型：{name}' : undefined)
+      if (template !== undefined && typeof inst.on === 'function') {
+        bump('__genuiBinds')
+        inst.on('click', (params) => {
+          const name = typeof params?.name === 'string' ? params.name : ''
+          bump('__genuiClicks')
+          if (name === '' || name.startsWith(PLACEHOLDER_PREFIX)) return
+          if (drillKey === undefined) {
+            // Plain action chart: one click = one action (previous behavior).
+            bump('__genuiActions')
+            onActionRef.current?.(template.replaceAll('{name}', name), { type: 'echart-click', name })
+            return
+          }
+          // Drill mode: same-name dedupe, single-flight, visible serial queue.
+          if (inflightRef.current === name || queueRef.current.includes(name)) {
+            bump('__genuiDedup')
+            return
+          }
+          if (inflightRef.current !== null) {
+            if (queueRef.current.length >= DRILL_QUEUE_MAX) return
+            queueRef.current.push(name)
+            setDrillQueue([...queueRef.current])
+            bump('__genuiQueued')
+            return
+          }
+          dispatchDrill(name)
+        })
+      }
       setStatus('ready')
     }).catch(() => {
       if (alive) setStatus('error')
@@ -414,6 +596,8 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
 
     return () => {
       alive = false
+      if (drillKey !== undefined) drillRegistry.delete(drillKey)
+      if (timeoutRef.current !== null) clearTimeout(timeoutRef.current)
       instanceRef.current?.dispose()
       instanceRef.current = null
     }
@@ -445,6 +629,16 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node, status])
 
+  if (mergedNote !== null) {
+    // Drill answer merged into the original chart — no second chart here.
+    return (
+      <div className={css.echartWrap} data-genui-echart>
+        {node.title !== undefined && <div className={css.echartTitle}>{renderInline(node.title)}</div>}
+        <div className={css.echartHint}>{mergedNote}</div>
+      </div>
+    )
+  }
+
   if (status === 'error') {
     return (
       <div className={css.echartFallback} data-genui-echart>
@@ -457,6 +651,25 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
   return (
     <div className={css.echartWrap} data-genui-echart>
       {node.title !== undefined && <div className={css.echartTitle}>{renderInline(node.title)}</div>}
+      {drillQueue.length > 0 && (
+        <div style={{ fontSize: 12, color: '#6b7280', padding: '2px 8px' }}>
+          排队：
+          {drillQueue.map(n => (
+            <button
+              key={n}
+              type="button"
+              title="点击取消"
+              onClick={() => {
+                queueRef.current = queueRef.current.filter(q => q !== n)
+                setDrillQueue([...queueRef.current])
+              }}
+              style={{ margin: '0 4px', padding: '0 6px', cursor: 'pointer', fontSize: 12 }}
+            >
+              {n} ✕
+            </button>
+          ))}
+        </div>
+      )}
       <div
         ref={ref}
         className={css.echartCanvas}

@@ -847,6 +847,21 @@ export interface GenuiEChart {
   /** Full ECharts option object. When present, `preset`/`data`/`series` are
    * ignored. This is a pass-through to `echarts.setOption`. */
   option?: Record<string, unknown>
+  /** Click-to-action bridge: when set, clicking a chart node sends
+   * `[genui-action] <template>` back to the model with `{name}` replaced by
+   * the hit node's name (e.g. `"下钻模型：{name}"` on a tree of models).
+   * Requires the full echarts engine (raw `option` or non-core preset). */
+  actionTemplate?: string
+  /** Drill-down UX: optimistic placeholder on node click, single-flight with
+   * a visible serial queue, and patch merging. `key` is this chart's stable
+   * identity (e.g. the root entity name) — later patch fences carrying the
+   * same `drillPatch.key` merge into this chart instead of rendering anew. */
+  drill?: { key: string }
+  /** Drill patch (the model's ANSWER to a drill action): merge `children`
+   * into node `target` of the chart registered under `key`, then render only
+   * a small merged note — the full tree stays in the original message. When
+   * the original chart is gone, the patch renders as a standalone subtree. */
+  drillPatch?: { key: string; target: string; children: unknown[] }
 }
 
 /** Parse the raw fence body as a GenuiSpec, or null when it is not one. */

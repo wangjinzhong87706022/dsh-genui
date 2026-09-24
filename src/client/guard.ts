@@ -672,6 +672,14 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
       }
     }
     case 'echart': {
+      // Diagnostic knobs: localize where actionTemplate is lost
+      // (input seen → passed through → received by EChartNode).
+      {
+        const knobs = globalThis as unknown as Record<string, unknown>
+        if (v.actionTemplate !== undefined) {
+          knobs.__genuiGuardATIn = (Number(knobs.__genuiGuardATIn) || 0) + 1
+        }
+      }
       // Preset shorthand data/series reuse the chart repair helpers.
       const data = v.data !== undefined ? repairChartData(v.data, GENUI_LIMITS.maxChartPoints) : undefined
       const series = v.series !== undefined && Array.isArray(v.series)
@@ -699,9 +707,30 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
         sanitized === undefined || typeof sanitized !== 'object' || sanitized === null || Array.isArray(sanitized)
           ? undefined
           : sanitized as Record<string, unknown>
-      // At least one of preset+data, links or option must be present.
+      // Drill contract: `drill` marks the interactive chart (optimistic
+      // placeholder + single-flight queue + patch merging); `drillPatch` is
+      // the model's answer, merged into the registered chart by `key`.
+      const drill = (() => {
+        const d = obj(v.drill)
+        const key = d === undefined ? undefined : str(d.key, 64)
+        return key === undefined ? undefined : { key }
+      })()
+      const drillPatch = (() => {
+        const p = obj(v.drillPatch)
+        if (p === undefined) return undefined
+        const key = str(p.key, 64)
+        const target = str(p.target, 64)
+        const children = Array.isArray(p.children)
+          ? sanitizeEChartOption({ nodes: p.children }, 0, { count: GENUI_LIMITS.maxEChartOptionNodes })
+          : undefined
+        if (key === undefined || target === undefined || children === undefined) return undefined
+        const nodes = (children as { nodes?: unknown[] }).nodes
+        return { key, target, children: Array.isArray(nodes) ? nodes : [] }
+      })()
+      // At least one of preset+data, links, option or drillPatch must be
+      // present — a patch fence carries ONLY drillPatch by design.
       if (option === undefined && data === undefined && series === undefined
-        && (links === undefined || links.length === 0)) return null
+        && (links === undefined || links.length === 0) && drillPatch === undefined) return null
       return {
         type: 'echart',
         ...opt('title', str(v.title, GENUI_LIMITS.maxString)),
@@ -712,6 +741,13 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
         ...opt('links', links !== undefined && links.length > 0 ? links : undefined),
         ...opt('palette', paletteValues(v.palette)),
         ...opt('option', option),
+        // Click-to-action template (`{name}` placeholder replaced at click).
+        ...opt('actionTemplate', str(v.actionTemplate, 200)),
+        ...opt('drill', drill),
+        ...opt('drillPatch', drillPatch),
+        ...(v.actionTemplate !== undefined
+          ? (() => { const k = globalThis as unknown as Record<string, unknown>; k.__genuiGuardATOut = (Number(k.__genuiGuardATOut) || 0) + 1; return {} })()
+          : {}),
       }
     }
     case 'citations': {
@@ -2077,11 +2113,13 @@ function validateNode(value: unknown, depth: number, at: string, errors: string[
 
     case 'echart':
       // `links` alone is a valid payload: the sankey/graph presets are driven
-      // by edges only. Missing it here rejected the whole fence as
-      // un-renderable (the render gate turns any error into "render nothing").
+      // by edges only. `drillPatch` alone is valid too: the drill answer
+      // merges into the originally registered chart. Missing both here
+      // rejected the whole fence as un-renderable (the render gate turns any
+      // error into "render nothing").
       if (v.option === undefined && v.data === undefined && v.series === undefined
-        && (!Array.isArray(v.links) || v.links.length === 0)) {
-        errors.push(`${at}: type 'echart' requires option, data, series, or links`)
+        && (!Array.isArray(v.links) || v.links.length === 0) && v.drillPatch === undefined) {
+        errors.push(`${at}: type 'echart' requires option, data, series, links, or drillPatch`)
       }
       isNum('height')
       break

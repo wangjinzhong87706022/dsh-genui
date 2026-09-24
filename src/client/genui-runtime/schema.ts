@@ -329,9 +329,10 @@ export const COMPONENT_SCHEMAS: Readonly<Record<string, ComponentSchema>> = {
   // reach for it here too; without the alias the whole node (and fence) drops.
   diff: schema(['diffs'], { ...nodeFields, diffs: 'array' }, { items: 'diffs', files: 'diffs' }, { nested: { diffs: diffRecordSchema } }),
   divider: schema([], nodeFields),
-  echart: schema([], { ...nodeFields, title: 'string', height: 'number', preset: 'string', data: 'array', series: 'array', links: 'array', palette: 'array', option: 'object' }, {}, {
-    // `links` alone is valid: the sankey/graph presets are edge-driven.
-    oneOfRequired: [['option', 'data', 'series', 'links']],
+  echart: schema([], { ...nodeFields, title: 'string', height: 'number', preset: 'string', data: 'array', series: 'array', links: 'array', palette: 'array', option: 'object', actionTemplate: 'string', drill: 'object', drillPatch: 'object' }, {}, {
+    // `links` alone is valid: the sankey/graph presets are edge-driven;
+    // `drillPatch` alone is valid: the drill answer merges into the original chart.
+    oneOfRequired: [['option', 'data', 'series', 'links', 'drillPatch']],
     enums: { preset: ECHART_PRESETS },
   }),
   'file-tree': schema(['items'], { ...nodeFields, items: 'array' }, { nodes: 'items' }, { nested: { items: fileTreeNodeSchema } }),
