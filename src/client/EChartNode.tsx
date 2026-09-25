@@ -492,12 +492,8 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
     // Full `option` wins over preset shorthand.
     const option = node.option ?? presetOption(node, el)
     const drillKey = node.drill?.key
-    if (drillKey !== undefined) {
-      // Drill charts: single click = drill intent. Disable echarts' own
-      // expand/collapse so a browsing click can never double as a drill.
-      const series = (option as { series?: Array<Record<string, unknown>> }).series?.[0]
-      if (series !== undefined) series.expandAndCollapse = false
-    }
+    // Drill uses DBLCLICK, so echarts' own single-click expand/collapse stays
+    // available for browsing without ever double-firing as a drill.
 
     void lazyCreateChart(el, option, { height: node.height ?? 300 }, neededEngine(node)).then((inst) => {
       if (!alive) {
@@ -572,7 +568,11 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
         }
         return true
       }
-      if (drillKey !== undefined) {
+      if (drillKey !== undefined && node.drillPatch === undefined && !drillRegistry.has(drillKey)) {
+        // Register the drill TARGET. Never overwrite: patch-answer charts also
+        // carry `drill` in their template, and a patch chart mounting later
+        // must not steal the original chart's merge route. The has() guard
+        // also keeps streaming half-templates from registering prematurely.
         drillRegistry.set(drillKey, { merge })
         // Mutable tree data source: raw `option` charts read series[0].data;
         // preset:'tree' charts read node.tree.data (styled option built below).
@@ -586,16 +586,19 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
         }
       }
 
-      // Chart-click → [genui-action]: `{name}` in the template is replaced by
-      // the hit node's name; empty names (canvas background) are ignored.
-      // Drill charts get a default template — model adherence on a second
-      // copied field is flaky, and drill alone is enough to opt into clicking.
+      // Chart-click/double-click → [genui-action]: `{name}` in the template is
+      // replaced by the hit node's name; empty names (canvas background) are
+      // ignored. Drill charts get a default template — model adherence on a
+      // second copied field is flaky, and drill alone is enough to opt in.
+      // Drill listens on DBLCLICK so echarts' single-click expand/collapse
+      // stays free for browsing; plain action charts keep single click.
       // Counter knobs (__genuiBinds/__genuiClicks/__genuiActions/...) exist
       // for E2E diagnosis of the chain: bind → hit → action → queue → merge.
       const template = node.actionTemplate ?? (drillKey !== undefined ? '下钻模型：{name}' : undefined)
       if (template !== undefined && typeof inst.on === 'function') {
         bump('__genuiBinds')
-        inst.on('click', (params) => {
+        const eventName = drillKey !== undefined ? 'dblclick' : 'click'
+        inst.on(eventName, (params) => {
           const name = typeof params?.name === 'string' ? params.name : ''
           bump('__genuiClicks')
           if (name === '' || name.startsWith(PLACEHOLDER_PREFIX)) return
@@ -657,6 +660,18 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
     if (status !== 'ready' || instanceRef.current === null) return
     const option = node.option ?? presetOption(node, ref.current)
     instanceRef.current.setOption(option, true)
+    // Drill patch streaming: merge into the registered target on EVERY node
+    // update — children stream in append-only and the merge dedupes by name,
+    // so repeated merges are idempotent and the final update carries the
+    // complete subtree (no tail loss).
+    if (node.drillPatch !== undefined) {
+      const reg = drillRegistry.get(node.drillPatch.key)
+      if (reg !== undefined) {
+        const knobs = globalThis as unknown as Record<string, unknown>
+        knobs.__genuiMerges = (Number(knobs.__genuiMerges) || 0) + 1
+        reg.merge(node.drillPatch.target, node.drillPatch.children ?? [])
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node, status])
 
