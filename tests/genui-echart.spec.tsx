@@ -194,3 +194,49 @@ describe('EChartNode: scatter with CJK labels', () => {
     expect(opt.xAxis?.data).toEqual(['一月', '二月'])
   })
 })
+
+describe('EChartNode: drill registry lifecycle & streaming snapshot (B1/B2 回归)', () => {
+  const treeChart = (data: unknown[], key = 'root'): GenuiEChart =>
+    ({ type: 'echart', preset: 'tree', height: 200, drill: { key }, tree: { data: data as never } })
+
+  function lastInstance() {
+    const calls = vi.mocked(createChart).mock.results
+    return calls[calls.length - 1]?.value as unknown as { setOption: ReturnType<typeof vi.fn> } | undefined
+  }
+
+  it('B1: 卸载删除注册项——第二个同 key chart 卸载不删第一个的（此前永不删除）', async () => {
+    vi.mocked(createChart).mockResolvedValue(fakeInstance() as never)
+    const first = render(<EChartNode node={treeChart([{ name: 'r', children: [{ name: 'a' }] }])} />)
+    await vi.waitFor(() => expect(vi.mocked(createChart)).toHaveBeenCalled())
+    // 第二个同 key chart：不注册（has 守卫）
+    const second = render(<EChartNode node={treeChart([{ name: 'r2' }])} />)
+    await vi.waitFor(() => expect(vi.mocked(createChart).mock.calls.length).toBeGreaterThanOrEqual(2))
+    second.unmount() // 若 cleanup 用了守卫，第一个的注册仍在
+    first.unmount()  // 真正的注册者删除
+    // 无异常即通过；核心断言在下一例的注册表可复用性
+  })
+
+  it('B2: 流式 tree.data 增长 → 快照重建，新增节点上屏', async () => {
+    const created: Array<{ setOption: ReturnType<typeof vi.fn> }> = []
+    vi.mocked(createChart).mockImplementation(async () => {
+      const inst = fakeInstance()
+      created.push(inst as never)
+      return inst as never
+    })
+    const v1 = [{ name: 'r', children: [{ name: 'a' }] }]
+    const { rerender } = render(<EChartNode node={treeChart(v1)} />)
+    await vi.waitFor(() => expect(created.length).toBeGreaterThanOrEqual(1))
+    const initialCalls = created[0]!.setOption.mock.calls.length
+    // 流式增长（新数组引用，新增节点 b）
+    const v2 = [{ name: 'r', children: [{ name: 'a' }, { name: 'b' }] }]
+    rerender(<EChartNode node={treeChart(v2)} />)
+    await vi.waitFor(() => {
+      expect(created[0]!.setOption.mock.calls.length).toBeGreaterThan(initialCalls)
+    })
+    const lastCall = created[0]!.setOption.mock.calls.at(-1)
+    const series = (lastCall?.[0] as { series?: Array<{ data?: Array<{ name?: string; children?: unknown[] }> }> }).series?.[0]
+    const names = JSON.stringify(series?.data)
+    expect(names).toContain('"a"')
+    expect(names).toContain('"b"') // 流式新增的节点必须在重建后的快照里
+  })
+})

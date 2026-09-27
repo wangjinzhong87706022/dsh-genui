@@ -482,6 +482,13 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
   const regKeyRef = useRef('')
   // Imperative re-render of the accumulated tree (set by the mount effect).
   const applyTreeRef = useRef<(() => void) | null>(null)
+  // B2 streaming: the source data reference the snapshot was cloned from, and
+  // the patches merged into it. When the model's stream grows the tree (new
+  // node prop, same component), the snapshot is rebuilt from the NEW source
+  // and these patches are replayed — otherwise streamed additions never reach
+  // the screen and drilled-in subtrees are lost on every re-render.
+  const lastSourceRef = useRef<unknown>(null)
+  const mergedPatchesRef = useRef<Array<{ target: string; children: unknown[] }>>([])
 
   useEffect(() => {
     let alive = true
@@ -581,8 +588,16 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
         if (data === null) return false
         const targetNode = findTreeNode(data, target)
         if (targetNode === undefined) return false
+        // Redraw only when this pass actually changed the tree: a removed
+        // placeholder OR an added node counts — streaming patches re-merge on
+        // every chunk and a fully-duplicated pass would otherwise replay the
+        // whole tree animation for nothing (while skipping the redraw after a
+        // placeholder removal would leave the stale placeholder on screen).
+        let changed = false
         if (targetNode.children !== undefined) {
-          targetNode.children = targetNode.children.filter(c => !String(c.name ?? '').startsWith(PLACEHOLDER_PREFIX))
+          const kept = targetNode.children.filter(c => !String(c.name ?? '').startsWith(PLACEHOLDER_PREFIX))
+          if (kept.length !== targetNode.children.length) changed = true
+          targetNode.children = kept
         }
         targetNode.children = targetNode.children ?? []
         const existing = new Set(targetNode.children.map(c => String(c.name ?? '')))
@@ -592,8 +607,12 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
           if (name === '' || existing.has(name)) continue
           targetNode.children.push(child as DrillTreeNode)
           existing.add(name)
+          changed = true
         }
-        applyTree()
+        // Record for snapshot rebuilds (B2): a later source update replays
+        // these against the fresh tree so merged drill-ins survive streaming.
+        mergedPatchesRef.current.push({ target, children })
+        if (changed) applyTree()
         if (inflightRef.current === target) {
           inflightRef.current = null
           if (timeoutRef.current !== null) { clearTimeout(timeoutRef.current); timeoutRef.current = null }
@@ -604,6 +623,10 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
         return true
       }
       const regKey = drillKey !== undefined ? registryKey(drillKey) : ''
+      // Must be assigned BEFORE the registry check: cleanup deletes through
+      // this ref, and a missed assignment makes that guard always false —
+      // registry entries would then leak on every unmount.
+      regKeyRef.current = regKey
       registeredRef.current = drillKey !== undefined && !drillRegistry.has(regKey)
       if (registeredRef.current && regKey !== '') {
         // Register the drill TARGET. Never overwrite: a second chart carrying
@@ -612,13 +635,17 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
         drillRegistry.set(regKey, { merge })
         // Mutable tree data source: raw `option` charts read series[0].data;
         // preset:'tree' charts read node.tree.data (styled option built below).
+        // lastSourceRef remembers the reference the snapshot came from — the
+        // update effect compares against it to detect streamed source growth.
         const series0 = (node.option as { series?: Array<{ data?: unknown }> } | undefined)?.series?.[0]
         if (Array.isArray(series0?.data)) {
           treeDataRef.current = cloneTreeData(series0.data as DrillTreeNode[])
           baseOptionRef.current = structuredClone(node.option) as Record<string, unknown>
+          lastSourceRef.current = series0.data
         } else if (node.tree !== undefined && Array.isArray(node.tree.data)) {
           treeDataRef.current = cloneTreeData(node.tree.data as DrillTreeNode[])
           baseOptionRef.current = presetOption(node, el) as Record<string, unknown>
+          lastSourceRef.current = node.tree.data
         }
       }
 
@@ -670,6 +697,11 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
       if (timeoutRef.current !== null) clearTimeout(timeoutRef.current)
       instanceRef.current?.dispose()
       instanceRef.current = null
+      // Drop the mutable snapshot too: a merge routed to this dead entry must
+      // fail (treeDataRef null → return false → patch renders its fallback)
+      // instead of "succeeding" against a disposed instance and silently
+      // eating the model's patch answer.
+      treeDataRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -718,8 +750,33 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
     }
     // Drill target charts keep their ACCUMULATED tree (merged patches live in
     // treeDataRef, not node.tree.data); re-deriving from the node would drop
-    // every drilled-in subtree on any spec re-render.
+    // every drilled-in subtree on any spec re-render. BUT when the SOURCE
+    // reference changed (streaming grew the tree / model re-sent a bigger
+    // tree), the snapshot is stale: rebuild it from the new source and replay
+    // the merged patches — both the streamed additions and the drilled-in
+    // subtrees must survive.
     if (node.drill !== undefined && treeDataRef.current !== null) {
+      const series0 = (node.option as { series?: Array<{ data?: unknown }> } | undefined)?.series?.[0]
+      const source = Array.isArray(series0?.data)
+        ? series0!.data
+        : node.tree !== undefined && Array.isArray(node.tree.data) ? node.tree.data : null
+      if (source !== null && source !== lastSourceRef.current) {
+        lastSourceRef.current = source
+        treeDataRef.current = cloneTreeData(source as DrillTreeNode[])
+        for (const p of mergedPatchesRef.current) {
+          const targetNode = findTreeNode(treeDataRef.current, p.target)
+          if (targetNode === undefined) continue
+          targetNode.children = targetNode.children ?? []
+          const existing = new Set(targetNode.children.map(c => String(c.name ?? '')))
+          for (const child of p.children ?? []) {
+            if (child === null || typeof child !== 'object') continue
+            const name = String((child as DrillTreeNode).name ?? '')
+            if (name === '' || existing.has(name)) continue
+            targetNode.children.push(child as DrillTreeNode)
+            existing.add(name)
+          }
+        }
+      }
       applyTreeRef.current?.()
       return
     }
