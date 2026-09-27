@@ -16,7 +16,9 @@ import { useEffect, useRef, useState } from 'react'
 import css from './GenuiBlock.module.css'
 import { CORE_PRESETS, createChart as lazyCreateChart, type EChartsInstance } from './echarts-lazy.ts'
 import { CHART_COLORS } from './blocks/charts.tsx'
+import { GENUI_LIMITS } from './genui-runtime/limits.ts'
 import { useGenuiAction } from './action-context.ts'
+import { diagBump } from './diagnostics.ts'
 import type { GenuiEChart } from './spec.ts'
 
 /** Which engine bundle this node needs (progressive disclosure). */
@@ -430,9 +432,14 @@ const registryKey = (key: string): string => `${drillScope}::${key}`
  * chart. Patch fences in later messages look their target chart up here. */
 const drillRegistry = new Map<string, { merge: (target: string, children: unknown[]) => boolean }>()
 
-const DRILL_TIMEOUT_MS = 90_000
-const DRILL_QUEUE_MAX = 3
-const PLACEHOLDER_PREFIX = '⏳'
+const DRILL_TIMEOUT_MS = GENUI_LIMITS.drillTimeoutMs
+const DRILL_QUEUE_MAX = GENUI_LIMITS.drillQueueMax
+/**
+ * Placeholder sentinel. A private-use codepoint a model will never emit in a
+ * node name — unlike an emoji prefix, which would make a real model starting
+ * with that glyph both unclickable and silently dropped by the merge filter.
+ */
+const PLACEHOLDER_PREFIX = ''
 
 function findTreeNode(data: DrillTreeNode[], name: string): DrillTreeNode | undefined {
   for (const node of data) {
@@ -480,17 +487,15 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
     let alive = true
     const el = ref.current
     if (el === null) return
-    const knobs = globalThis as unknown as Record<string, unknown>
-    const bump = (k: string): void => { knobs[k] = (Number(knobs[k]) || 0) + 1 }
 
     // Drill ANSWER (patch fence): merge into the registered chart and render
     // only a small note. Falls back to a standalone subtree chart when the
     // original chart is no longer mounted (unmounted/scrolled-out message).
     if (node.drillPatch !== undefined) {
-      bump('__genuiPatchArrivals')
+      diagBump('patchArrivals')
       const reg = drillRegistry.get(registryKey(node.drillPatch.key))
       if (reg !== undefined && reg.merge(node.drillPatch.target, node.drillPatch.children ?? [])) {
-        bump('__genuiMerges')
+        diagBump('merges')
         setMergedNote(`✅ 已展开「${node.drillPatch.target}」并并入上图`)
         return
       }
@@ -529,8 +534,8 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
         return
       }
       instanceRef.current = inst
-      bump('__genuiEchartMounts')
-      if (node.actionTemplate !== undefined) bump('__genuiMountAT')
+      diagBump('echartMounts')
+      if (node.actionTemplate !== undefined) diagBump('actionTemplateMounts')
 
       const applyTree = (): void => {
         // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -552,10 +557,10 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
             itemStyle: { color: '#9aa3b2', borderColor: '#9aa3b2' },
             label: { color: '#9aa3b2' },
           })
-          bump('__genuiPlaceholders')
+          diagBump('placeholders')
           applyTree()
         }
-        bump('__genuiActions')
+        diagBump('actions')
         onActionRef.current?.(`下钻模型：${name}`, { type: 'echart-click', name })
         timeoutRef.current = setTimeout(() => {
           if (inflightRef.current !== name) return
@@ -623,32 +628,32 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
       // second copied field is flaky, and drill alone is enough to opt in.
       // Drill listens on DBLCLICK so echarts' single-click expand/collapse
       // stays free for browsing; plain action charts keep single click.
-      // Counter knobs (__genuiBinds/__genuiClicks/__genuiActions/...) exist
-      // for E2E diagnosis of the chain: bind → hit → action → queue → merge.
+      // `diagBump` counters trace the chain for E2E (opt-in, see
+      // client/diagnostics.ts): bind → hit → action → queue → merge.
       const template = node.actionTemplate ?? (drillKey !== undefined ? '下钻模型：{name}' : undefined)
       if (template !== undefined && typeof inst.on === 'function') {
-        bump('__genuiBinds')
+        diagBump('binds')
         const eventName = drillKey !== undefined ? 'dblclick' : 'click'
         inst.on(eventName, (params) => {
           const name = typeof params?.name === 'string' ? params.name : ''
-          bump('__genuiClicks')
+          diagBump('clicks')
           if (name === '' || name.startsWith(PLACEHOLDER_PREFIX)) return
           if (drillKey === undefined) {
             // Plain action chart: one click = one action (previous behavior).
-            bump('__genuiActions')
+            diagBump('actions')
             onActionRef.current?.(template.replaceAll('{name}', name), { type: 'echart-click', name })
             return
           }
           // Drill mode: same-name dedupe, single-flight, visible serial queue.
           if (inflightRef.current === name || queueRef.current.includes(name)) {
-            bump('__genuiDedup')
+            diagBump('dedup')
             return
           }
           if (inflightRef.current !== null) {
             if (queueRef.current.length >= DRILL_QUEUE_MAX) return
             queueRef.current.push(name)
             setDrillQueue([...queueRef.current])
-            bump('__genuiQueued')
+            diagBump('queued')
             return
           }
           dispatchDrill(name)
@@ -699,8 +704,7 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
       if (node.drillPatch !== undefined) {
         const reg = drillRegistry.get(registryKey(node.drillPatch.key))
         if (reg !== undefined && reg.merge(node.drillPatch.target, node.drillPatch.children ?? [])) {
-          const knobs = globalThis as unknown as Record<string, unknown>
-          knobs.__genuiMerges = (Number(knobs.__genuiMerges) || 0) + 1
+          diagBump('merges')
           setMergedNote(`✅ 已展开「${node.drillPatch.target}」并并入上图`)
         } else if (patchOptionRef.current !== null) {
           const series = (patchOptionRef.current.series as Array<{ data?: unknown }>)[0]

@@ -26,6 +26,11 @@ export const GENUI_LIMITS = {
   /** Maximum `chart` data points per series. */
   maxChartPoints: 60,
   maxCitations: 24,
+  /** Drill-down: single-flight timeout (ms) before a pending node's placeholder
+   * is cleaned up and the queue advances. */
+  drillTimeoutMs: 90_000,
+  /** Drill-down: how many pending double-clicks queue up behind the in-flight one. */
+  drillQueueMax: 3,
   /** Maximum `plot` series and per-series parameters. */
   maxPlotSeries: 8,
   maxPlotParams: 6,

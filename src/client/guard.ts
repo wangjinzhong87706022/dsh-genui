@@ -32,6 +32,7 @@ import { diagnoseUnknownGenuiFields } from './genui-runtime/diagnostics.ts'
 import type { GenuiDiagnostic } from './genui-runtime/diagnostics.ts'
 import { GENUI_LIMITS } from './genui-runtime/limits.ts'
 import { color, enu, int, num, obj, opt, safeHref, safeMediaSrc, str } from './genui-runtime/value-utils.ts'
+import { diagBump } from './diagnostics.ts'
 
 /** Result of `validateGenuiSpec`. */
 export interface GenuiValidation {
@@ -672,14 +673,7 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
       }
     }
     case 'echart': {
-      // Diagnostic knobs: localize where actionTemplate is lost
-      // (input seen → passed through → received by EChartNode).
-      {
-        const knobs = globalThis as unknown as Record<string, unknown>
-        if (v.actionTemplate !== undefined) {
-          knobs.__genuiGuardATIn = (Number(knobs.__genuiGuardATIn) || 0) + 1
-        }
-      }
+      diagBump('guardATIn')
       // Preset shorthand data/series reuse the chart repair helpers.
       const data = v.data !== undefined ? repairChartData(v.data, GENUI_LIMITS.maxChartPoints) : undefined
       const series = v.series !== undefined && Array.isArray(v.series)
@@ -739,6 +733,7 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
       // present — a patch fence carries ONLY drillPatch by design.
       if (option === undefined && data === undefined && series === undefined
         && (links === undefined || links.length === 0) && drillPatch === undefined && tree === undefined) return null
+      if (v.actionTemplate !== undefined) diagBump('guardATOut')
       return {
         type: 'echart',
         ...opt('title', str(v.title, GENUI_LIMITS.maxString)),
@@ -754,9 +749,6 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
         ...opt('drill', drill),
         ...opt('drillPatch', drillPatch),
         ...opt('tree', tree),
-        ...(v.actionTemplate !== undefined
-          ? (() => { const k = globalThis as unknown as Record<string, unknown>; k.__genuiGuardATOut = (Number(k.__genuiGuardATOut) || 0) + 1; return {} })()
-          : {}),
       }
     }
     case 'citations': {

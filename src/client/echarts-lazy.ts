@@ -14,9 +14,10 @@ export interface EChartsInstance {
   setOption: (opt: unknown, notMerge?: boolean) => void
   resize: () => void
   dispose: () => void
-  /** Native echarts event binding (full-engine instances only). Present on
-   * instances created by the echarts asset; used by `actionTemplate` to
-   * bridge chart clicks back to the conversation. */
+  /** Native echarts event binding. Every engine returns a full `EChartsType`
+   * (core assets included), so this is present in practice; it stays optional
+   * for degraded/older hosts. Used by `actionTemplate` and `drill` to bridge
+   * chart clicks back to the conversation. */
   on?: (eventName: string, handler: (params: {
     /** Hit-test name (tree node name, series datum label, …). */
     name?: unknown
