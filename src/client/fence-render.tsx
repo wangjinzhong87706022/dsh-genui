@@ -296,10 +296,7 @@ export function renderResolvedFenceNode(raw: string, key: Key, context?: GenuiFe
  */
 export function renderGenuiFence(raw: string, key: Key, context?: GenuiFenceContext): ReactNode {
   const spec = resolveGenuiSpec(raw, context)
-  if (spec === null) {
-    console.log('[drill-debug] FALLBACK raw head:', raw.slice(0, 70))
-    return <FenceFallback key={key} fenceKey={key} raw={raw} />
-  }
+  if (spec === null) return <FenceFallback key={key} fenceKey={key} raw={raw} />
   if (spec.panel === true) {
     if (context !== undefined && context.sessionId !== undefined && context.source !== undefined) {
       if (spec.append === true && !isCompleteJson(raw)) return null

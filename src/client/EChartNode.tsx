@@ -368,8 +368,12 @@ function presetOption(node: GenuiEChart, el?: HTMLElement | null): Record<string
       // palette/roam/emphasis/toolbox live here so long-template transcription
       // (the JSON-corruption source) never reaches the model.
       const data = node.tree?.data ?? []
+      const tt = themeColors(el)
       return {
-        tooltip: { trigger: 'item', triggerOn: 'mousemove' },
+        // renderMode 'richText' keeps model-written node names out of the HTML
+        // parser — same invariant every other preset's tooltip upholds.
+        tooltip: { renderMode: 'richText', backgroundColor: tt.bgLayer1, borderColor: tt.border, textStyle: { color: tt.labelPrimary }, trigger: 'item', triggerOn: 'mousemove' },
+        backgroundColor: 'transparent',
         toolbox: { show: true, feature: { saveAsImage: {} }, right: 10, top: 2 },
         series: [{
           type: 'tree', data, roam: true, initialTreeDepth: -1, orient: 'LR',
@@ -413,8 +417,17 @@ function optItemStyleColor(color: string | undefined, _i: number, _series: unkno
 
 interface DrillTreeNode { name?: unknown; children?: DrillTreeNode[]; [k: string]: unknown }
 
-/** Per-page registry: drill.key → merge fn of the still-mounted drill chart.
- * Patch fences in later messages look their target chart up here. */
+/** Registry namespace: set by the fence renderer from the live session id so
+ * two open sessions writing the same `drill.key` can never merge into each
+ * other's charts (module-level Map would otherwise be page-global). */
+let drillScope = 'dom'
+export function setDrillScope(scope: string | undefined): void {
+  drillScope = scope ?? 'dom'
+}
+const registryKey = (key: string): string => `${drillScope}::${key}`
+
+/** Per-page registry: (session::key) → merge fn of the still-mounted drill
+ * chart. Patch fences in later messages look their target chart up here. */
 const drillRegistry = new Map<string, { merge: (target: string, children: unknown[]) => boolean }>()
 
 const DRILL_TIMEOUT_MS = 90_000
@@ -453,6 +466,15 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const treeDataRef = useRef<DrillTreeNode[] | null>(null)
   const baseOptionRef = useRef<Record<string, unknown> | null>(null)
+  // Patch-answer charts render their own (fallback) option; the update effect
+  // must reuse it rather than re-derive one from a patch-only node.
+  const isPatchRef = useRef(false)
+  const patchOptionRef = useRef<Record<string, unknown> | null>(null)
+  // Only the instance that REGISTERED a merge route may delete it on unmount.
+  const registeredRef = useRef(false)
+  const regKeyRef = useRef('')
+  // Imperative re-render of the accumulated tree (set by the mount effect).
+  const applyTreeRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -466,14 +488,18 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
     // original chart is no longer mounted (unmounted/scrolled-out message).
     if (node.drillPatch !== undefined) {
       bump('__genuiPatchArrivals')
-      const reg = drillRegistry.get(node.drillPatch.key)
+      const reg = drillRegistry.get(registryKey(node.drillPatch.key))
       if (reg !== undefined && reg.merge(node.drillPatch.target, node.drillPatch.children ?? [])) {
         bump('__genuiMerges')
         setMergedNote(`✅ 已展开「${node.drillPatch.target}」并并入上图`)
         return
       }
+      // Standalone fallback (target chart gone). `renderMode: 'richText'`
+      // keeps model-written node names out of the HTML parser, like every
+      // other preset's tooltip.
+      const t = themeColors(el)
       const fallbackOption: Record<string, unknown> = {
-        tooltip: { trigger: 'item' },
+        tooltip: { renderMode: 'richText', backgroundColor: t.bgLayer1, borderColor: t.border, textStyle: { color: t.labelPrimary }, trigger: 'item' },
         series: [{
           type: 'tree', roam: true, initialTreeDepth: -1, orient: 'LR',
           left: 16, right: 160, top: 10, bottom: 10,
@@ -481,6 +507,8 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
           data: [{ name: node.drillPatch.target, children: node.drillPatch.children ?? [] }],
         }],
       }
+      isPatchRef.current = true
+      patchOptionRef.current = fallbackOption
       void lazyCreateChart(el, fallbackOption, { height: node.height ?? 300 }, 'full').then((inst) => {
         if (!alive) { inst.dispose(); return }
         instanceRef.current = inst
@@ -505,12 +533,14 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
       if (node.actionTemplate !== undefined) bump('__genuiMountAT')
 
       const applyTree = (): void => {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         if (instanceRef.current === null || baseOptionRef.current === null || treeDataRef.current === null) return
         const base = baseOptionRef.current
         const series = (base.series as Array<{ data?: unknown }>)[0]
         if (series !== undefined) series.data = treeDataRef.current
         instanceRef.current.setOption(base)
       }
+      applyTreeRef.current = applyTree
       const dispatchDrill = (name: string): void => {
         inflightRef.current = name
         const data = treeDataRef.current
@@ -568,12 +598,13 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
         }
         return true
       }
-      if (drillKey !== undefined && node.drillPatch === undefined && !drillRegistry.has(drillKey)) {
-        // Register the drill TARGET. Never overwrite: patch-answer charts also
-        // carry `drill` in their template, and a patch chart mounting later
-        // must not steal the original chart's merge route. The has() guard
-        // also keeps streaming half-templates from registering prematurely.
-        drillRegistry.set(drillKey, { merge })
+      const regKey = drillKey !== undefined ? registryKey(drillKey) : ''
+      registeredRef.current = drillKey !== undefined && !drillRegistry.has(regKey)
+      if (registeredRef.current && regKey !== '') {
+        // Register the drill TARGET. Never overwrite: a second chart carrying
+        // the same key must not steal the first one's merge route. Only the
+        // registering instance may delete the entry on unmount.
+        drillRegistry.set(regKey, { merge })
         // Mutable tree data source: raw `option` charts read series[0].data;
         // preset:'tree' charts read node.tree.data (styled option built below).
         const series0 = (node.option as { series?: Array<{ data?: unknown }> } | undefined)?.series?.[0]
@@ -630,7 +661,7 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
 
     return () => {
       alive = false
-      if (drillKey !== undefined) drillRegistry.delete(drillKey)
+      if (registeredRef.current && regKeyRef.current !== '') drillRegistry.delete(regKeyRef.current)
       if (timeoutRef.current !== null) clearTimeout(timeoutRef.current)
       instanceRef.current?.dispose()
       instanceRef.current = null
@@ -658,20 +689,38 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
   // returned early when status was 'loading' and never re-run).
   useEffect(() => {
     if (status !== 'ready' || instanceRef.current === null) return
+    // Patch-answer chart: keep its own fallback option. Re-deriving from a
+    // patch-only node hands `presetOption` no preset/data and blanks the chart
+    // (notMerge replaces the whole series list).
+    if (isPatchRef.current) {
+      // Merge on EVERY update: children stream in append-only and merge
+      // dedupes by name, so repeats are idempotent and the last update carries
+      // the complete subtree (no tail loss).
+      if (node.drillPatch !== undefined) {
+        const reg = drillRegistry.get(registryKey(node.drillPatch.key))
+        if (reg !== undefined && reg.merge(node.drillPatch.target, node.drillPatch.children ?? [])) {
+          const knobs = globalThis as unknown as Record<string, unknown>
+          knobs.__genuiMerges = (Number(knobs.__genuiMerges) || 0) + 1
+          setMergedNote(`✅ 已展开「${node.drillPatch.target}」并并入上图`)
+        } else if (patchOptionRef.current !== null) {
+          const series = (patchOptionRef.current.series as Array<{ data?: unknown }>)[0]
+          if (series !== undefined) {
+            series.data = [{ name: node.drillPatch.target, children: node.drillPatch.children ?? [] }]
+          }
+          instanceRef.current.setOption(patchOptionRef.current)
+        }
+      }
+      return
+    }
+    // Drill target charts keep their ACCUMULATED tree (merged patches live in
+    // treeDataRef, not node.tree.data); re-deriving from the node would drop
+    // every drilled-in subtree on any spec re-render.
+    if (node.drill !== undefined && treeDataRef.current !== null) {
+      applyTreeRef.current?.()
+      return
+    }
     const option = node.option ?? presetOption(node, ref.current)
     instanceRef.current.setOption(option, true)
-    // Drill patch streaming: merge into the registered target on EVERY node
-    // update — children stream in append-only and the merge dedupes by name,
-    // so repeated merges are idempotent and the final update carries the
-    // complete subtree (no tail loss).
-    if (node.drillPatch !== undefined) {
-      const reg = drillRegistry.get(node.drillPatch.key)
-      if (reg !== undefined) {
-        const knobs = globalThis as unknown as Record<string, unknown>
-        knobs.__genuiMerges = (Number(knobs.__genuiMerges) || 0) + 1
-        reg.merge(node.drillPatch.target, node.drillPatch.children ?? [])
-      }
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node, status])
 

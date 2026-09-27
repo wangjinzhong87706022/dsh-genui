@@ -54,6 +54,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { GenuiActionContext, type GenuiActionHandler } from './action-context.ts'
+import { setDrillScope } from './EChartNode.tsx'
 import css from './GenuiBlock.module.css'
 import { renderSvgFence } from './svg-fence.tsx'
 import { describeFenceFailure, FenceDiagnostic, renderResolvedFenceNode, type GenuiFenceContext } from './fence-render.tsx'
@@ -414,7 +415,11 @@ export function installDomFenceRenderer(
 
   const sessionIdOf = (): SessionId | undefined => {
     try {
-      return ctx.sessions.list.getSnapshot().current
+      const current = ctx.sessions.list.getSnapshot().current
+      // Namespace the drill registry by session so two open sessions writing
+      // the same drill.key can never merge patches into each other's charts.
+      setDrillScope(current === undefined ? undefined : String(current))
+      return current
     } catch {
       return undefined
     }
