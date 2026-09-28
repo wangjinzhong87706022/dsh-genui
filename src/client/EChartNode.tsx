@@ -343,9 +343,95 @@ function presetOption(node: GenuiEChart, el?: HTMLElement | null): Record<string
         degree.set(l.to, (degree.get(l.to) ?? 0) + 1)
       }
       // A relation is an EDGE, not a node: `links[].label` (the relation name)
-      // renders on the edge. Only edges that carry a label opt in, so a plain
-      // topology chart is unaffected.
+      // renders on the edge, and the arrowhead carries direction. Line colour
+      // is a FIXED tone, not the theme border token — the border token resolves
+      // to a near-invisible wash on light hosts (the "nodes but no edges"
+      // screenshot); the tree preset's tone reads on both themes.
+      // Arrows/labels opt in only when at least one edge carries a label —
+      // undirected topology charts must not grow arrowheads.
       const edgeLabels = links.some(l => l.label !== undefined)
+      const line = { color: '#b8c6dd', width: 1.5, curveness: 0.12 }
+      const edgeDecor: Record<string, unknown> = edgeLabels ? {
+        edgeSymbol: ['none', 'arrow'],
+        edgeSymbolSize: 9,
+        edgeLabel: {
+          show: true, color: t.labelSecondary, fontSize: 10,
+          backgroundColor: 'rgba(255,255,255,0.75)', padding: [1, 3], borderRadius: 2,
+          formatter: (p: { data?: { label?: string } }) => p.data?.label ?? '',
+        },
+      } : {}
+      const nodeData = names.map(name => ({ name, symbolSize: 16 + (degree.get(name) ?? 0) * 5 }))
+
+      // Hierarchy layout: root (first data item) on the left, BFS layers into
+      // columns — the tree-like reading order relation charts need. All edges
+      // survive (a tree series could not draw the back-edges).
+      if (node.graphLayout === 'hierarchy' && names.length > 1 && links.length > 0) {
+        const adjacency = new Map<string, string[]>()
+        for (const l of links) {
+          if (!adjacency.has(l.from)) adjacency.set(l.from, [])
+          adjacency.get(l.from)!.push(l.to)
+        }
+        const depth = new Map<string, number>()
+        const root = names[0]!
+        depth.set(root, 0)
+        const queue = [root]
+        while (queue.length > 0) {
+          const cur = queue.shift()!
+          for (const nxt of adjacency.get(cur) ?? []) {
+            if (!depth.has(nxt)) {
+              depth.set(nxt, depth.get(cur)! + 1)
+              queue.push(nxt)
+            }
+          }
+        }
+        // Unreached nodes (no path from root) trail as the last column.
+        const maxDepth = Math.max(0, ...depth.values())
+        for (const n of names) {
+          if (!depth.has(n)) depth.set(n, maxDepth + 1)
+        }
+        const columns = new Map<number, string[]>()
+        for (const n of names) {
+          const d = depth.get(n)!
+          if (!columns.has(d)) columns.set(d, [])
+          columns.get(d)!.push(n)
+        }
+        const height = node.height ?? 300
+        const positioned = names.map((name) => {
+          const d = depth.get(name)!
+          const col = columns.get(d)!
+          // Spread each column vertically; the 1-index keeps nodes off the border.
+          const y = ((col.indexOf(name) + 1) / (col.length + 1)) * (height - 40) + 20
+          return {
+            name,
+            x: 70 + d * 300,
+            y,
+            symbolSize: name === root ? Math.max(20, 16 + (degree.get(name) ?? 0) * 5) : 16 + (degree.get(name) ?? 0) * 5,
+            // 根的出边全在右侧扇开，标签放下方才压不着线
+            label: name === root ? { position: 'bottom' } : undefined,
+          }
+        })
+        return {
+          ...base,
+          tooltip: tt({ trigger: 'item' }),
+          series: [{
+            type: 'graph',
+            layout: 'none',
+            roam: true,
+            label: { show: true, position: 'right', color: t.labelSecondary, fontSize: 11 },
+            lineStyle: line,
+            ...edgeDecor,
+            emphasis: { focus: 'adjacency' },
+            data: positioned,
+            links: links.map(l => ({
+              source: l.from,
+              target: l.to,
+              ...(l.value !== undefined ? { value: l.value } : {}),
+              ...(l.label !== undefined ? { label: l.label } : {}),
+            })),
+          }],
+        }
+      }
+
       return {
         ...base,
         tooltip: tt({ trigger: 'item' }),
@@ -355,16 +441,10 @@ function presetOption(node: GenuiEChart, el?: HTMLElement | null): Record<string
           roam: true,
           label: { show: true, color: t.labelSecondary, fontSize: 11 },
           force: { repulsion: 200, edgeLength: 80 },
-          lineStyle: { color: t.border, curveness: 0.1 },
-          // Arrowheads carry the direction (a relation is directed), sized
-          // with the edge so they stay legible next to the label.
-          edgeSymbol: edgeLabels ? ['none', 'arrow'] : undefined,
-          edgeSymbolSize: edgeLabels ? 8 : undefined,
-          edgeLabel: edgeLabels
-            ? { show: true, color: t.labelTertiary, fontSize: 10, formatter: (p: { data?: { label?: string } }) => p.data?.label ?? '' }
-            : undefined,
+          lineStyle: line,
+          ...edgeDecor,
           emphasis: { focus: 'adjacency' },
-          data: names.map(name => ({ name, symbolSize: 16 + (degree.get(name) ?? 0) * 5 })),
+          data: nodeData,
           links: links.map(l => ({
             source: l.from,
             target: l.to,

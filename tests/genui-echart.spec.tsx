@@ -352,3 +352,55 @@ describe('EChartNode: graph preset 边标签（关系是边不是节点）', () 
     expect(fmt({})).toBe('')
   })
 })
+
+describe('EChartNode: graph hierarchy 布局（关系图谱树状阅读）', () => {
+  const g = (extra: Partial<GenuiEChart> = {}): GenuiEChart => ({
+    type: 'echart', preset: 'graph', height: 400,
+    graphLayout: 'hierarchy',
+    data: [{ label: '设备基础模型' }, { label: '设备参数列模型' }, { label: '保养项目模型' }],
+    links: [
+      { from: '设备基础模型', to: '设备参数列模型', label: '设备参数列表' },
+      { from: '设备基础模型', to: '保养项目模型', label: '保养字典' },
+    ],
+    ...extra,
+  })
+  const optOf = (): { series?: Array<Record<string, unknown>> } =>
+    vi.mocked(createChart).mock.calls[0]?.[1] as { series?: Array<Record<string, unknown>> }
+
+  it('hierarchy：layout none + 节点带 x/y，根在第一列（x 最小）', async () => {
+    vi.mocked(createChart).mockResolvedValue(fakeInstance())
+    render(<EChartNode node={g()} />)
+    await vi.waitFor(() => expect(createChart).toHaveBeenCalled())
+    const series = optOf().series![0]!
+    expect(series.layout).toBe('none')
+    const nodes = series.data as Array<{ name: string; x: number; y: number }>
+    const root = nodes.find(n => n.name === '设备基础模型')!
+    expect(root.x).toBeLessThan(nodes.find(n => n.name === '设备参数列模型')!.x)
+    // 同列节点 y 不同，不重叠
+    const ys = nodes.filter(n => n.name !== '设备基础模型').map(n => n.y)
+    expect(new Set(ys).size).toBe(ys.length)
+  })
+
+  it('边可见：固定线色（非主题 border）+ 箭头 + label 上边', async () => {
+    vi.mocked(createChart).mockResolvedValue(fakeInstance())
+    render(<EChartNode node={g()} />)
+    await vi.waitFor(() => expect(createChart).toHaveBeenCalled())
+    const series = optOf().series![0]!
+    const lineStyle = series.lineStyle as { color: string }
+    // 回归：主题 border 色在浅色主题下近乎不可见（"有节点无边"截图的根因）
+    expect(lineStyle.color).not.toBe('')
+    expect(lineStyle.color).toMatch(/^#/)
+    expect(series.edgeSymbol).toEqual(['none', 'arrow'])
+    const links = series.links as Array<{ label?: string }>
+    expect(links.every(l => typeof l.label === 'string')).toBe(true)
+  })
+
+  it('force 缺省布局不变（无 graphLayout 时仍为力导向）', async () => {
+    vi.mocked(createChart).mockResolvedValue(fakeInstance())
+    const node = g()
+    delete (node as Partial<GenuiEChart>).graphLayout
+    render(<EChartNode node={node} />)
+    await vi.waitFor(() => expect(createChart).toHaveBeenCalled())
+    expect(optOf().series![0]!.layout).toBe('force')
+  })
+})

@@ -23,7 +23,7 @@ import { isComponentRoot, wrapSingleComponentRoot } from './spec.ts'
 import {
   BADGE_TONES, BUTTON_TONES, CALLOUT_TONES, CARD_TONES, CHART_KINDS, COMPONENT_SCHEMAS, HERO_TONES,
   DIAGRAM_EDGE_KINDS, DIAGRAM_KINDS, DIAGRAM_NODE_TYPES, DIAGRAM_ROUTES, DIAGRAM_VARIANTS,
-  ECHART_PRESETS, FILE_TYPES, GENUI_NATIVE_TYPES, GENUI_SPEC_SCHEMA, INPUT_TYPES,
+  ECHART_PRESETS, FILE_TYPES, GENUI_NATIVE_TYPES, GENUI_SPEC_SCHEMA, GRAPH_LAYOUTS, INPUT_TYPES,
   MEDIA_ASPECT_RATIOS, MESH_SHAPES, PLOT_KINDS, PROGRESS_VARIANTS, TABLE_CELL_TYPES, TEXT_SIZES,
 } from './genui-runtime/schema.ts'
 import type { ComponentFieldKind, ComponentRecordSchema, ComponentSchema } from './genui-runtime/schema.ts'
@@ -680,13 +680,15 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
         ? repairSeries(v.series, GENUI_LIMITS.maxPlotSeries, GENUI_LIMITS.maxChartPoints)
         : undefined
       // sankey / graph edges: `from`/`to` must be strings, `value` a number.
+      // `label` renders on the edge (graph relation charts: 关系是边不是节点) —
+      // dropping it here would silently strip every relation name off the chart.
       const links = Array.isArray(v.links)
         ? v.links.slice(0, GENUI_LIMITS.maxChartPoints).flatMap(entry => {
           const e = obj(entry)
           const from = e === undefined ? undefined : str(e.from, 64)
           const to = e === undefined ? undefined : str(e.to, 64)
           if (from === undefined || to === undefined) return []
-          return [{ from, to, ...opt('value', num(e!.value, 0, 1e9)) }]
+          return [{ from, to, ...opt('value', num(e!.value, 0, 1e9)), ...opt('label', str(e!.label, 64)) }]
         })
         : undefined
       // Full option: depth-bounded pass-through (the model writes the ECharts
@@ -746,6 +748,8 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
         ...opt('option', option),
         // Click-to-action template (`{name}` placeholder replaced at click).
         ...opt('actionTemplate', str(v.actionTemplate, 200)),
+        // graph 节点布局：hierarchy = 根在左、按层向右（关系图谱用，树状观感）。
+        ...opt('graphLayout', enu(v.graphLayout, GRAPH_LAYOUTS)),
         ...opt('drill', drill),
         ...opt('drillPatch', drillPatch),
         ...opt('tree', tree),

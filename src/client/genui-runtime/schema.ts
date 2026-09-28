@@ -83,6 +83,9 @@ export const ECHART_PRESETS = [
   'bar', 'line', 'area', 'pie', 'scatter',
   'radar', 'gauge', 'funnel', 'treemap', 'sankey', 'graph', 'heatmap', 'bigline', 'wordCloud', 'tree',
 ] as const
+/** `echart` graph-node layout: `force` (default) or `hierarchy` (root-left
+ * columns, tree-like reading order for relation charts). */
+export const GRAPH_LAYOUTS = ['force', 'hierarchy'] as const
 /** Oversized single-number stat (one per fence as the visual anchor). */
 export const STAT_SIZES = ['hero'] as const
 /** Progress shapes: a track (default) or a circular gauge. */
@@ -329,12 +332,12 @@ export const COMPONENT_SCHEMAS: Readonly<Record<string, ComponentSchema>> = {
   // reach for it here too; without the alias the whole node (and fence) drops.
   diff: schema(['diffs'], { ...nodeFields, diffs: 'array' }, { items: 'diffs', files: 'diffs' }, { nested: { diffs: diffRecordSchema } }),
   divider: schema([], nodeFields),
-  echart: schema([], { ...nodeFields, title: 'string', height: 'number', preset: 'string', data: 'array', series: 'array', links: 'array', palette: 'array', option: 'object', actionTemplate: 'string', drill: 'object', drillPatch: 'object', tree: 'object' }, {}, {
+  echart: schema([], { ...nodeFields, title: 'string', height: 'number', preset: 'string', data: 'array', series: 'array', links: 'array', palette: 'array', option: 'object', actionTemplate: 'string', drill: 'object', drillPatch: 'object', tree: 'object', graphLayout: 'string' }, {}, {
     // `links` alone is valid: the sankey/graph presets are edge-driven;
     // `drillPatch` alone is valid: the drill answer merges into the original chart;
     // `tree` alone is valid: the tree preset builds the styled option from nested nodes.
     oneOfRequired: [['option', 'data', 'series', 'links', 'drillPatch', 'tree']],
-    enums: { preset: ECHART_PRESETS },
+    enums: { preset: ECHART_PRESETS, graphLayout: GRAPH_LAYOUTS },
   }),
   'file-tree': schema(['items'], { ...nodeFields, items: 'array' }, { nodes: 'items' }, { nested: { items: fileTreeNodeSchema } }),
   grid: schema(['items'], { ...nodeFields, cols: 'number', items: 'nodes' }),

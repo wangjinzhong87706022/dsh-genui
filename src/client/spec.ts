@@ -8,7 +8,7 @@
  * v1 interactivity is client-side only: buttons, tabs, checkboxes, and inputs
  * are operable, but events do NOT flow back to the model.
  */
-import { COMPONENT_SCHEMAS, GENUI_NATIVE_TYPES } from './genui-runtime/schema.ts'
+import { COMPONENT_SCHEMAS, GENUI_NATIVE_TYPES, GRAPH_LAYOUTS } from './genui-runtime/schema.ts'
 
 /** One node in the component tree. */
 /** Layout hints accepted by every node: `span` is how many columns the node
@@ -847,6 +847,14 @@ export interface GenuiEChart {
    * name belongs on the link rather than in a synthetic intermediate node.
    */
   links?: Array<{ from: string; to: string; value?: number; label?: string }>
+  /**
+   * `graph` preset layout. `force` (default) is a physics blob — fine for
+   * mesh/topology charts, unreadable for relation graphs. `hierarchy` places
+   * the root (first data item) at the left and lays successive BFS layers into
+   * columns, tree-like, while keeping ALL edges (arrows + edge labels) — a
+   * tree series cannot do either.
+   */
+  graphLayout?: (typeof GRAPH_LAYOUTS)[number]
   /** Explicit categorical palette (hex) for preset mode. */
   palette?: string[]
   /** Full ECharts option object. When present, `preset`/`data`/`series` are
