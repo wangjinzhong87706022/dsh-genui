@@ -30,6 +30,21 @@ function fakeInstance() {
   return { setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }
 }
 
+/** Instance that records event bindings so a test can fire a chart click. */
+function fakeInstanceWithEvents() {
+  const handlers = new Map<string, (params: { name?: unknown }) => void>()
+  return {
+    setOption: vi.fn(),
+    resize: vi.fn(),
+    dispose: vi.fn(),
+    on: vi.fn((event: string, handler: (params: { name?: unknown }) => void) => {
+      handlers.set(event, handler)
+    }),
+    fire: (event: string, params: { name?: unknown }) => handlers.get(event)?.(params),
+    boundEvents: () => [...handlers.keys()],
+  }
+}
+
 describe('EChartNode: series palette', () => {
   it('keeps eight distinct fallback hues (host tokens may be absent)', () => {
     // The regression: every slot fell back to the single accent colour, so a
@@ -235,5 +250,62 @@ describe('EChartNode: drill 子树就地展开（2026-09-27 行为变更）', ()
     expect(first).toContain('"X"')
     expect(second).toContain('"Y"')
     expect(second).not.toContain('"X"') // 独立图，不含上一棵树
+  })
+})
+
+describe('EChartNode: drill 走单击（2026-09-28 修复双击失效）', () => {
+  const drillChart = (): GenuiEChart => ({
+    type: 'echart', preset: 'tree', height: 300, drill: { key: '设备基础模型' },
+    tree: { data: [{ name: '设备基础模型', children: [{ name: '能源基础模型' }] }] },
+  })
+
+  it('drill 绑 click 而非 dblclick', async () => {
+    // The regression: drill was bound to 'dblclick', but ECharts' tree toggles
+    // the subtree on every single click and re-renders — the first click moved
+    // the node, so the second never closed a dblclick sequence and drill was
+    // dead. Click is the only binding that can fire.
+    const inst = fakeInstanceWithEvents()
+    vi.mocked(createChart).mockImplementation(async () => inst as never)
+    render(<EChartNode node={drillChart()} />)
+    await vi.waitFor(() => expect(inst.on).toHaveBeenCalled())
+    expect(inst.boundEvents()).toEqual(['click'])
+  })
+
+  it('tree preset 关掉 expandAndCollapse：单击不再被 ECharts 折叠抢走', async () => {
+    const inst = fakeInstanceWithEvents()
+    vi.mocked(createChart).mockImplementation(async () => inst as never)
+    render(<EChartNode node={drillChart()} />)
+    await vi.waitFor(() => expect(createChart).toHaveBeenCalled())
+    const opt = vi.mocked(createChart).mock.calls[0]?.[1] as {
+      series?: Array<{ type?: string; expandAndCollapse?: boolean }>
+    }
+    expect(opt?.series?.[0]?.type).toBe('tree')
+    expect(opt?.series?.[0]?.expandAndCollapse).toBe(false)
+  })
+
+  it('drillPatch 子树同样关折叠（保持与首图一致的交互）', async () => {
+    const inst = fakeInstanceWithEvents()
+    vi.mocked(createChart).mockImplementation(async () => inst as never)
+    const node: GenuiEChart = {
+      type: 'echart', preset: 'tree', height: 220,
+      drillPatch: { key: '设备基础模型', target: '能源基础模型', children: [{ name: '对端' }] },
+    }
+    render(<EChartNode node={node} />)
+    await vi.waitFor(() => expect(createChart).toHaveBeenCalled())
+    const opt = vi.mocked(createChart).mock.calls[0]?.[1] as {
+      series?: Array<{ type?: string; expandAndCollapse?: boolean }>
+    }
+    expect(opt?.series?.[0]?.expandAndCollapse).toBe(false)
+  })
+
+  it('非 drill 的普通 action 图表仍绑 click（行为不变）', async () => {
+    const inst = fakeInstanceWithEvents()
+    vi.mocked(createChart).mockImplementation(async () => inst as never)
+    render(<EChartNode node={{
+      type: 'echart', preset: 'bar', height: 200, actionTemplate: '看看 {name}',
+      data: [{ label: '一月', value: 1 }],
+    }} />)
+    await vi.waitFor(() => expect(inst.on).toHaveBeenCalled())
+    expect(inst.boundEvents()).toEqual(['click'])
   })
 })

@@ -81,6 +81,14 @@ function themeColors(el?: HTMLElement | null): {
  * same palette/roam/emphasis/toolbox so a drill answer looks like its parent
  * chart. `renderMode: 'richText'` keeps model-written node names out of the
  * HTML parser (the same invariant every other preset's tooltip upholds).
+ *
+ * `expandAndCollapse: false` is load-bearing for drill charts, not cosmetic.
+ * With it on, ECharts toggles the subtree on EVERY single click and re-renders
+ * — which both steals the click from a `dblclick` binding (the second click
+ * lands on the re-laid-out node, so no dblclick sequence is ever recognised)
+ * and makes the optimistic placeholder fight the native collapse. A tree
+ * already renders fully expanded via `initialTreeDepth: -1`, so collapsing
+ * costs the reader nothing.
  */
 function treeOption(data: unknown[], el?: HTMLElement | null, rightPad = 200): Record<string, unknown> {
   const t = themeColors(el)
@@ -90,6 +98,7 @@ function treeOption(data: unknown[], el?: HTMLElement | null, rightPad = 200): R
     toolbox: { show: true, feature: { saveAsImage: {} }, right: 10, top: 2 },
     series: [{
       type: 'tree', data, roam: true, initialTreeDepth: -1, orient: 'LR',
+      expandAndCollapse: false,
       left: 16, right: rightPad, top: 10, bottom: 10, symbol: 'circle', symbolSize: 12,
       itemStyle: { color: '#5b8ff9', borderColor: '#5b8ff9', borderWidth: 2 },
       lineStyle: { color: '#b8c6dd', width: 1.5, curveness: 0.45 },
@@ -505,8 +514,6 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
     // Full `option` wins over preset shorthand.
     const option = node.option ?? presetOption(node, el)
     const drillKey = node.drill?.key
-    // Drill uses DBLCLICK, so echarts' own single-click expand/collapse stays
-    // available for browsing without ever double-firing as a drill.
 
     void lazyCreateChart(el, option, { height: node.height ?? 300 }, neededEngine(node)).then((inst) => {
       if (!alive) {
@@ -569,19 +576,22 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
           if (next !== undefined) dispatchDrill(next)
         }, DRILL_TIMEOUT_MS)
       }
-      // Chart-click/double-click → [genui-action]: `{name}` in the template is
-      // replaced by the hit node's name; empty names (canvas background) are
-      // ignored. Drill charts get a default template — model adherence on a
-      // second copied field is flaky, and drill alone is enough to opt in.
-      // Drill listens on DBLCLICK so echarts' single-click expand/collapse
-      // stays free for browsing; plain action charts keep single click.
+      // Chart-click → [genui-action]: `{name}` in the template is replaced by
+      // the hit node's name; empty names (canvas background) are ignored. Drill
+      // charts get a default template — model adherence on a second copied
+      // field is flaky, and drill alone is enough to opt in.
+      //
+      // Drill binds `click`, NOT `dblclick`: treeOption turns off ECharts'
+      // expandAndCollapse, so a single click is free for the drill handler and
+      // nothing re-renders between the two clicks of a double-click. Binding
+      // dblclick while collapse was still on could never fire — the first click
+      // re-laid-out the tree, so the second never closed a dblclick sequence.
       // `diagBump` counters trace the chain for E2E (opt-in, see
-      // client/diagnostics.ts): bind → hit → action → queue → merge.
+      // client/diagnostics.ts): bind → hit → action → queue → patch.
       const template = node.actionTemplate ?? (drillKey !== undefined ? '下钻模型：{name}' : undefined)
       if (template !== undefined && typeof inst.on === 'function') {
         diagBump('binds')
-        const eventName = drillKey !== undefined ? 'dblclick' : 'click'
-        inst.on(eventName, (params) => {
+        inst.on('click', (params) => {
           const name = typeof params?.name === 'string' ? params.name : ''
           diagBump('clicks')
           if (name === '' || name.startsWith(PLACEHOLDER_PREFIX)) return
@@ -691,6 +701,11 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
             </button>
           ))}
         </div>
+      )}
+      {/* The affordance is invisible otherwise: node folding is off, so a click
+          on a node does nothing visible until the drill answer streams back. */}
+      {node.drill !== undefined && drillQueue.length === 0 && (
+        <div className={css.echartHint} style={{ padding: '2px 8px' }}>💡 单击图中任意节点可下钻查看它的关系</div>
       )}
       <div
         ref={ref}
