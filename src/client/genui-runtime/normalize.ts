@@ -57,6 +57,29 @@ function normalizeAliasFields(value: Record<string, unknown>, path: string, type
     if (!(alias in out)) continue
     const aliasPath = `${path}.${alias}`
     const keptCanonical = canonical in out
+    // Table's `data` alias may arrive as the OBJECT `{columns, rows}` (a
+    // model-improvised fence shape) rather than the rows array — lift both
+    // fields to their canonical homes instead of poisoning `rows` with an
+    // object the row repair cannot read.
+    if (type === 'table' && alias === 'data') {
+      const payload = record(out.data)
+      if (payload !== undefined && Array.isArray(payload.columns) && Array.isArray(payload.rows)) {
+        if (!keptCanonical) {
+          out.columns = payload.columns
+          out.rows = payload.rows
+        }
+        delete out.data
+        warnings.push({
+          kind: 'alias',
+          path: aliasPath,
+          message: `${aliasPath} normalized/adopted as 'columns'+'rows' (object payload)`,
+          type,
+          field: alias,
+          canonical: 'rows',
+        })
+        continue
+      }
+    }
     if (!keptCanonical) out[canonical] = out[alias]
     delete out[alias]
     warnings.push({

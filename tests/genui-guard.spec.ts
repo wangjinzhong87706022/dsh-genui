@@ -529,3 +529,39 @@ describe('repairGenuiSpec: color field whitelist (CSS injection channel)', () =>
     expect(scene.meshes[0]!.color).toBeUndefined()
   })
 })
+
+describe('table 形状推断兜底（模型自创围栏的近似形态）', () => {
+  it('无 type + data:{columns,rows} → 修复为 table 节点（回归：用户看到原始 JSON）', () => {
+    const spec = {
+      items: [{
+        title: '设备参数列模型 · 字段构成（5 个）',
+        data: {
+          columns: ['字段名', '描述', '类型码'],
+          rows: [['id', 'ID', '1'], ['code', '参数类型码', '3'], ['name', '参数名称', '3']],
+        },
+      }],
+    }
+    const out = repairGenuiSpec(spec)
+    expect(out?.items[0]!.type).toBe('table')
+  })
+
+  it('type:table + data 对象包裹 → 同样修复', () => {
+    const spec = {
+      items: [{
+        type: 'table',
+        title: 't',
+        data: { columns: ['a', 'b'], rows: [['1', '2']] },
+      }],
+    }
+    const out = repairGenuiSpec(spec)
+    const n0 = out?.items[0] as { type: string; columns?: unknown[]; rows?: unknown[][] }
+    expect(n0.type).toBe('table')
+    expect(n0.columns).toEqual(['a', 'b'])
+    expect(n0.rows).toEqual([['1', '2']])
+  })
+
+  it('无 type 且形状不可辨认 → 仍拒绝（不乱猜）', () => {
+    const out = repairGenuiSpec({ items: [{ title: 'x', data: { foo: 1 } }] })
+    expect(out?.items).toHaveLength(0)
+  })
+})

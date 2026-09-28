@@ -262,7 +262,18 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
   if (depth > GENUI_LIMITS.maxDepth) return null
   const v = obj(value)
   if (v === undefined) return null
-  const type = v.type
+  let type = v.type
+  // Shape inference for the typeless near-miss: a node with no `type` whose
+  // payload is `{title?, data:{columns, rows}}` (or top-level columns+rows) is
+  // unambiguously a table — models that improvise a fence (instead of copying
+  // a supplied template) emit exactly this. Without the coercion the whole
+  // fence fails type dispatch and the user sees raw JSON.
+  if (typeof type !== 'string') {
+    const payload = obj(v.data)
+    const hasTableShape = (Array.isArray(v.columns) && Array.isArray(v.rows))
+      || (payload !== undefined && Array.isArray(payload.columns) && Array.isArray(payload.rows))
+    if (hasTableShape) type = 'table'
+  }
   if (typeof type !== 'string') return null
   switch (type) {
     case 'text': {
@@ -419,8 +430,15 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
       return { type: 'list', items, ...opt('filter', str(v.filter, 64)) }
     }
     case 'table': {
-      let rawCols = v.columns as unknown
-      let rawRows = v.rows !== undefined ? v.rows : (v as Record<string, unknown>).data
+      // Model-improvised shape `data:{columns,rows}` (object, not the array
+      // alias): lift the nested columns/rows before the array handling below.
+      const dataObj = obj(v.data)
+      let src: Record<string, unknown> = v
+      if (dataObj !== undefined && Array.isArray(dataObj.columns) && Array.isArray(dataObj.rows)) {
+        src = { ...v, columns: v.columns ?? dataObj.columns, rows: v.rows ?? dataObj.rows }
+      }
+      let rawCols = src.columns as unknown
+      let rawRows = src.rows !== undefined ? src.rows : src.data
       // Self-heal model-shaped tables: antd-style object columns
       // ({title,key}) become header strings, and object-array rows (or a
       // `data` alias) flatten to 2D rows keyed by the column keys — without
