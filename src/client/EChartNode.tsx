@@ -342,6 +342,10 @@ function presetOption(node: GenuiEChart, el?: HTMLElement | null): Record<string
         degree.set(l.from, (degree.get(l.from) ?? 0) + 1)
         degree.set(l.to, (degree.get(l.to) ?? 0) + 1)
       }
+      // A relation is an EDGE, not a node: `links[].label` (the relation name)
+      // renders on the edge. Only edges that carry a label opt in, so a plain
+      // topology chart is unaffected.
+      const edgeLabels = links.some(l => l.label !== undefined)
       return {
         ...base,
         tooltip: tt({ trigger: 'item' }),
@@ -352,9 +356,21 @@ function presetOption(node: GenuiEChart, el?: HTMLElement | null): Record<string
           label: { show: true, color: t.labelSecondary, fontSize: 11 },
           force: { repulsion: 200, edgeLength: 80 },
           lineStyle: { color: t.border, curveness: 0.1 },
+          // Arrowheads carry the direction (a relation is directed), sized
+          // with the edge so they stay legible next to the label.
+          edgeSymbol: edgeLabels ? ['none', 'arrow'] : undefined,
+          edgeSymbolSize: edgeLabels ? 8 : undefined,
+          edgeLabel: edgeLabels
+            ? { show: true, color: t.labelTertiary, fontSize: 10, formatter: (p: { data?: { label?: string } }) => p.data?.label ?? '' }
+            : undefined,
           emphasis: { focus: 'adjacency' },
           data: names.map(name => ({ name, symbolSize: 16 + (degree.get(name) ?? 0) * 5 })),
-          links: links.map(l => ({ source: l.from, target: l.to })),
+          links: links.map(l => ({
+            source: l.from,
+            target: l.to,
+            ...(l.value !== undefined ? { value: l.value } : {}),
+            ...(l.label !== undefined ? { label: l.label } : {}),
+          })),
         }],
       }
     }

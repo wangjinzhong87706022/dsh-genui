@@ -841,8 +841,12 @@ export interface GenuiEChart {
   data?: GenuiChartDatum[]
   /** Multi-series for preset mode (same shape as `chart.series`). */
   series?: Array<{ label: string; color?: string; data: GenuiChartDatum[] }>
-  /** Node/edge data for the `sankey` and `graph` presets. */
-  links?: Array<{ from: string; to: string; value?: number }>
+  /**
+   * Node/edge data for the `sankey` and `graph` presets. `label` renders on
+   * the edge (graph only) — relations are edges, not nodes, so the relation
+   * name belongs on the link rather than in a synthetic intermediate node.
+   */
+  links?: Array<{ from: string; to: string; value?: number; label?: string }>
   /** Explicit categorical palette (hex) for preset mode. */
   palette?: string[]
   /** Full ECharts option object. When present, `preset`/`data`/`series` are

@@ -309,3 +309,46 @@ describe('EChartNode: drill 走单击（2026-09-28 修复双击失效）', () =>
     expect(inst.boundEvents()).toEqual(['click'])
   })
 })
+
+describe('EChartNode: graph preset 边标签（关系是边不是节点）', () => {
+  const graphNode = (links: Array<{ from: string; to: string; label?: string }>): GenuiEChart => ({
+    type: 'echart', preset: 'graph', height: 300, links,
+  })
+  const optOf = (): { series?: Array<Record<string, unknown>> } =>
+    vi.mocked(createChart).mock.calls[0]?.[1] as { series?: Array<Record<string, unknown>> }
+
+  it('links[].label 渲染成边标签，且带箭头表示方向', async () => {
+    vi.mocked(createChart).mockResolvedValue(fakeInstance())
+    render(<EChartNode node={graphNode([
+      { from: '设备基础模型', to: '设备参数列模型', label: '设备参数列表' },
+    ])} />)
+    await vi.waitFor(() => expect(createChart).toHaveBeenCalled())
+    const series = optOf().series![0]!
+    expect(series.edgeSymbol).toEqual(['none', 'arrow'])
+    expect((series.edgeLabel as { show: boolean }).show).toBe(true)
+    // 关系名挂在边上，不再需要"关系名当节点"这种中间层
+    expect(JSON.stringify(series.links)).toContain('设备参数列表')
+    const nodeNames = (series.data as Array<{ name: string }>).map((d) => d.name)
+    expect(nodeNames).toContain('设备基础模型')
+    expect(nodeNames).toContain('设备参数列模型')
+    expect(nodeNames).not.toContain('设备参数列表')
+  })
+
+  it('无 label 的 links 不开边标签/箭头（普通拓扑图行为不变）', async () => {
+    vi.mocked(createChart).mockResolvedValue(fakeInstance())
+    render(<EChartNode node={graphNode([{ from: 'A', to: 'B' }])} />)
+    await vi.waitFor(() => expect(createChart).toHaveBeenCalled())
+    const series = optOf().series![0]!
+    expect(series.edgeSymbol).toBeUndefined()
+    expect(series.edgeLabel).toBeUndefined()
+  })
+
+  it('edgeLabel.formatter 从 link data 取 label，缺失时返回空串', async () => {
+    vi.mocked(createChart).mockResolvedValue(fakeInstance())
+    render(<EChartNode node={graphNode([{ from: 'A', to: 'B', label: '关系X' }])} />)
+    await vi.waitFor(() => expect(createChart).toHaveBeenCalled())
+    const fmt = (optOf().series![0]!.edgeLabel as { formatter: (p: unknown) => string }).formatter
+    expect(fmt({ data: { label: '关系X' } })).toBe('关系X')
+    expect(fmt({})).toBe('')
+  })
+})
