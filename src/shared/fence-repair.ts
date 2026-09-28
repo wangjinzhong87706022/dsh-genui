@@ -290,12 +290,49 @@ function rewriteTetrisTableColumns(raw: string): { text: string; repairs: number
  * failed, and re-scanning the raw text could not compose the repairs.
  * Adopted only when the completed body parses as whole JSON.
  */
+/**
+ * Remove parentheses OUTSIDE string literals. JSON has no parentheses, so
+ * every paren outside a string is transcription debris (a `)` mistyped for
+ * `}`). String-aware (handles `'` / `\\"` escapes); leaves in-string
+ * parens untouched.
+ */
+function stripParensOutsideStrings(raw: string): { text: string; repairs: number } | null {
+  let out = ''
+  let repairs = 0
+  let inSingle = false
+  let inDouble = false
+  let escaped = false
+  for (const ch of raw) {
+    if (escaped) { out += ch; escaped = false; continue }
+    if ((inSingle || inDouble) && ch === '\\') { out += ch; escaped = true; continue }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; out += ch; continue }
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; out += ch; continue }
+    if (!inSingle && !inDouble && (ch === '(' || ch === ')')) { repairs++; continue }
+    out += ch
+  }
+  return repairs > 0 ? { text: out, repairs } : null
+}
+
 export function completeFenceJson(raw: string): { text: string; repairs: number } | null {
   try {
     JSON.parse(raw)
     return null
   } catch {
     // fall through to the unified repair scan
+  }
+  // Paren pre-strip BEFORE the scan: the closer-appending loop's quote
+  // lookahead would otherwise swallow a `)` sitting right after a closing
+  // quote into the string (silently corrupting data). Must run before the
+  // scan, not inside it. If the stripped body is already legal, done.
+  const parens = stripParensOutsideStrings(raw)
+  if (parens !== null) {
+    try {
+      JSON.parse(parens.text)
+      return { text: parens.text, repairs: parens.repairs }
+    } catch {
+      const rescanned = completeFenceJson(parens.text)
+      if (rescanned !== null) return { text: rescanned.text, repairs: rescanned.repairs + parens.repairs }
+    }
   }
   // Shape defect first: the "Tetris table" nesting cannot be healed by the
   // closer-appending scan below (its brackets are balanced — just nested
@@ -363,16 +400,19 @@ export function completeFenceJson(raw: string): { text: string; repairs: number 
       out += ch
       continue
     }
-    if (ch === '}' || ch === ']') {
+    if (ch === '}' || ch === ']' || ch === ')' || ch === '(') {
       if (stack[stack.length - 1] === ch) {
         stack.pop()
         out += ch
       } else {
-        // Mismatched closer (e.g. a `]` mistyped as `}`, or a duplicated
-        // terminator): no legal JSON can contain it here, so skip it and let
-        // the remaining closers pair up again. The whole-body parse below is
-        // the final arbiter — if skipping made things worse, nothing is
-        // adopted and the diagnostic banner stays.
+        // Mismatched closer (e.g. a `]` mistyped as `}`, a duplicated
+        // terminator, or a `)` from template transcription — JSON has no
+        // parentheses at all): no legal JSON can contain it here, so skip it
+        // and let the remaining closers pair up again. The whole-body parse
+        // below is the final arbiter — if skipping made things worse, nothing
+        // is adopted and the diagnostic banner stays. Dropping parens HERE
+        // (not only in a separate pre-pass) is what makes the combo case
+        // "stray paren AND missing final closer" healable in one scan.
         repairs++
       }
       continue

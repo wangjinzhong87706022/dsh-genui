@@ -201,34 +201,40 @@ export function resolveGenuiSpec(raw: string, context?: GenuiFenceContext): Genu
   // and every later tier runs JSON.parse on its input — strip them up front.
   const stripped = stripUndefinedLiterals(raw)
   const body = stripped ?? raw
-  const parsed = parsePartialGenuiSpec(body)
-  let spec = parsed === null ? null : repairRenderableSpec(parsed)
-  if (spec === null) {
-    const repaired = repairFenceJson(body)
-    if (repaired !== null) {
-      const reparsed = parsePartialGenuiSpec(repaired.text)
-      spec = reparsed === null ? null : repairRenderableSpec(reparsed)
-    }
-    if (spec === null && context?.source !== undefined) {
-      // Stray-closer pass: a `)` mistyped for `}` (or any paren) while the
-      // model transcribes a long template — drop characters that cannot
-      // legally appear at their position and re-parse. SETTLED MESSAGES ONLY
-      // (a streaming half must never be "repaired" into a finished render).
-      const unstrayed = removeStrayClosers(body)
-      if (unstrayed !== null) {
-        const reparsed = parsePartialGenuiSpec(unstrayed.text)
-        spec = reparsed === null ? null : repairRenderableSpec(reparsed)
-      }
-    }
-    if (spec === null && context?.source !== undefined) {
-      const completed = completeFenceJson(body)
-      if (completed !== null) {
-        const reparsed = parsePartialGenuiSpec(completed.text)
-        spec = reparsed === null ? null : repairRenderableSpec(reparsed)
-      }
+  const settled = context?.source !== undefined
+  // Repair passes as ORDERED CANDIDATES over the original body. Each entry is
+  // { text, settledOnly }: parse + renderable-repair decides adoption, so a
+  // pass that cannot fully heal a body never poisons a later combination —
+  // e.g. a stray `)` AND a missing final `}` need removeStrayClosers followed
+  // by completeFenceJson, and feeding completeFenceJson the *unstrayed* text
+  // also fixes its quote-lookahead blind spot (a `)` right after a closing
+  // quote used to be swallowed into the string, silently corrupting data).
+  const candidates: string[] = [body]
+  // SETTLED first: paren-stripping is the most common transcription-slip root
+  // cause and must run BEFORE tier-1's quote-escape (a `)` right after a
+  // closing quote otherwise gets escaped into the string, silently corrupting
+  // the body into valid-but-wrong JSON), along with its completion combo.
+  if (settled) {
+    const unstrayed = removeStrayClosers(body)
+    if (unstrayed !== null) {
+      candidates.push(unstrayed.text)
+      const strayThenComplete = completeFenceJson(unstrayed.text)
+      if (strayThenComplete !== null) candidates.push(strayThenComplete.text)
     }
   }
-  return spec
+  const tier1 = repairFenceJson(body)
+  if (tier1 !== null) candidates.push(tier1.text)
+  if (settled) {
+    const completed = completeFenceJson(body)
+    if (completed !== null) candidates.push(completed.text)
+  }
+  for (const text of candidates) {
+    const reparsed = parsePartialGenuiSpec(text)
+    if (reparsed === null) continue
+    const spec = repairRenderableSpec(reparsed)
+    if (spec !== null) return spec
+  }
+  return null
 }
 
 /** The inline GenuiBlock tree for a resolved non-panel spec. */

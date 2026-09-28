@@ -258,3 +258,23 @@ describe('stray paren repair (template transcription slip, 2026-09-24)', () => {
     expect(document.body.textContent).toContain('preset')
   })
 })
+
+describe('repair pass 组合（游离括号 + 缺收尾，评审 M-1 场景 a/b）', () => {
+  // 场景 a：游离 `)` + 缺末尾 `}`——需要 stray 剥离与 complete 补收尾**组合**
+  const COMBO = '{"title":"x","items":[{"type":"text","content":"b")]}'
+  it('renders the combo-repaired body silently', () => {
+    render(<div>{renderGenuiFence(COMBO, 'combo1', { source: { id: 's', order: [1, 0, 0] } })}</div>)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.body.textContent).toContain('b')
+  })
+
+  // 场景 b（评审实测的静默腐坏）：`)` 紧跟闭合引号，旧 completeFenceJson 的
+  // 引号前瞻会把终止引号转义、把 `)]}]}` 整段吞进字符串——渲染出错误数据。
+  const SILENT_CORRUPT = '{"title":"x","items":[{"type":"text","content":"a")]}]}'
+  it('does NOT silently swallow the tail after a quote-adjacent paren', () => {
+    render(<div>{renderGenuiFence(SILENT_CORRUPT, 'combo2', { source: { id: 's', order: [1, 0, 0] } })}</div>)
+    // 修复后：剥离括号 → text 节点正常渲染出 content "a"（不再静默吞尾）
+    expect(document.body.textContent).toContain('a')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
