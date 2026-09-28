@@ -195,48 +195,45 @@ describe('EChartNode: scatter with CJK labels', () => {
   })
 })
 
-describe('EChartNode: drill registry lifecycle & streaming snapshot (B1/B2 回归)', () => {
-  const treeChart = (data: unknown[], key = 'root'): GenuiEChart =>
-    ({ type: 'echart', preset: 'tree', height: 200, drill: { key }, tree: { data: data as never } })
+describe('EChartNode: drill 子树就地展开（2026-09-27 行为变更）', () => {
+  const patchChart = (target: string, children: unknown[]): GenuiEChart =>
+    ({ type: 'echart', preset: 'tree', height: 220, drillPatch: { key: 'root', target, children } })
 
-  function lastInstance() {
-    const calls = vi.mocked(createChart).mock.results
-    return calls[calls.length - 1]?.value as unknown as { setOption: ReturnType<typeof vi.fn> } | undefined
-  }
-
-  it('B1: 卸载删除注册项——第二个同 key chart 卸载不删第一个的（此前永不删除）', async () => {
-    vi.mocked(createChart).mockResolvedValue(fakeInstance() as never)
-    const first = render(<EChartNode node={treeChart([{ name: 'r', children: [{ name: 'a' }] }])} />)
-    await vi.waitFor(() => expect(vi.mocked(createChart)).toHaveBeenCalled())
-    // 第二个同 key chart：不注册（has 守卫）
-    const second = render(<EChartNode node={treeChart([{ name: 'r2' }])} />)
-    await vi.waitFor(() => expect(vi.mocked(createChart).mock.calls.length).toBeGreaterThanOrEqual(2))
-    second.unmount() // 若 cleanup 用了守卫，第一个的注册仍在
-    first.unmount()  // 真正的注册者删除
-    // 无异常即通过；核心断言在下一例的注册表可复用性
-  })
-
-  it('B2: 流式 tree.data 增长 → 快照重建，新增节点上屏', async () => {
+  function renderChart(node: GenuiEChart) {
     const created: Array<{ setOption: ReturnType<typeof vi.fn> }> = []
     vi.mocked(createChart).mockImplementation(async () => {
       const inst = fakeInstance()
       created.push(inst as never)
       return inst as never
     })
-    const v1 = [{ name: 'r', children: [{ name: 'a' }] }]
-    const { rerender } = render(<EChartNode node={treeChart(v1)} />)
+    return created
+  }
+
+  it('patch 子树就地渲染成独立图（不并入上图）', async () => {
+    const created = renderChart(patchChart('设备基础模型', [{ name: '能源基础模型' }]))
+    render(<EChartNode node={patchChart('设备基础模型', [{ name: '能源基础模型' }])} />)
     await vi.waitFor(() => expect(created.length).toBeGreaterThanOrEqual(1))
-    const initialCalls = created[0]!.setOption.mock.calls.length
-    // 流式增长（新数组引用，新增节点 b）
-    const v2 = [{ name: 'r', children: [{ name: 'a' }, { name: 'b' }] }]
-    rerender(<EChartNode node={treeChart(v2)} />)
-    await vi.waitFor(() => {
-      expect(created[0]!.setOption.mock.calls.length).toBeGreaterThan(initialCalls)
-    })
-    const lastCall = created[0]!.setOption.mock.calls.at(-1)
-    const series = (lastCall?.[0] as { series?: Array<{ data?: Array<{ name?: string; children?: unknown[] }> }> }).series?.[0]
-    const names = JSON.stringify(series?.data)
-    expect(names).toContain('"a"')
-    expect(names).toContain('"b"') // 流式新增的节点必须在重建后的快照里
+    // patch 走 lazyCreateChart(el, patchOption) 直接建实例，option 是第 2 个入参
+    const opt = vi.mocked(createChart).mock.calls[0]?.[1] as { series?: Array<{ type?: string; data?: unknown[] }> }
+    expect(opt?.series?.[0]?.type).toBe('tree')
+    // 根节点是下钻目标，children 是新增子树
+    expect(JSON.stringify(opt?.series?.[0]?.data)).toContain('设备基础模型')
+    expect(JSON.stringify(opt?.series?.[0]?.data)).toContain('能源基础模型')
+  })
+
+  it('两个 patch 各自渲染成独立图（不合并、图不膨胀）', async () => {
+    const created = renderChart(patchChart('X', [{ name: 'a' }]))
+    const { unmount } = render(<EChartNode node={patchChart('X', [{ name: 'a' }])} />)
+    await vi.waitFor(() => expect(created.length).toBe(1))
+    unmount()
+    render(<EChartNode node={patchChart('Y', [{ name: 'b' }])} />)
+    await vi.waitFor(() => expect(created.length).toBe(2))
+    const callOpt = (i: number): string => JSON.stringify(
+      (vi.mocked(createChart).mock.calls[i]?.[1] as { series?: Array<{ data?: unknown }> }).series?.[0]?.data)
+    const first = callOpt(0)
+    const second = callOpt(1)
+    expect(first).toContain('"X"')
+    expect(second).toContain('"Y"')
+    expect(second).not.toContain('"X"') // 独立图，不含上一棵树
   })
 })

@@ -28,7 +28,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import { IconChevronDownOutline14, IconChevronUpOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { GenuiActionContext, type GenuiActionHandler } from './action-context.ts'
-import { DrillScopeContext } from './drill-scope.ts'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { GenuiBlock } from './GenuiBlock.tsx'
 import { ErrorBoundary } from './ErrorBoundary.tsx'
@@ -299,12 +298,10 @@ export function GenuiPanel({ sessionId, sendGenuiAction, insertTemplate }: Genui
             />
           ) : spec !== null ? (
             <GenuiActionContext.Provider value={sendGenuiAction}>
-              <DrillScopeContext.Provider value={sessionId}>
                 <ErrorBoundary label={t('panel.boundary')}>
                   {/* content-fingerprinted: same panel spec re-published restores its state */}
                   <GenuiBlock spec={spec} stateKey={panelStateKey(sessionId, JSON.stringify(spec))} />
                 </ErrorBoundary>
-              </DrillScopeContext.Provider>
             </GenuiActionContext.Provider>
           ) : null}
         </div>
