@@ -27,6 +27,7 @@ import { parsePartialGenuiSpec } from './parse-partial.ts'
 import { applyPanelOperation, diagnosePanelBudget, type PanelOperationStatus } from './panel-store.ts'
 import type { GenuiSpec } from './spec.ts'
 import { completeFenceJson, describeJsonFailure, isCompleteJson, removeStrayClosers, repairFenceJson, stripUndefinedLiterals } from '../shared/fence-repair.ts'
+import { DrillScopeContext } from './drill-scope.ts'
 
 /** Settled fence source identity (data shape, host-independent). */
 export interface GenuiFenceSource {
@@ -239,6 +240,7 @@ function renderInlineFence(key: Key, context: GenuiFenceContext | undefined, spe
     // Repaired specs render SILENTLY: once the UI renders, no amber note
     // tells the user something was wrong — only an unrecoverable body keeps
     // the red diagnostic.
+    <DrillScopeContext.Provider value={sessionId}>
     <ErrorBoundary key={JSON.stringify([sessionId, key])} label={t('err.boundary.fence')}>
       <GenuiBlock
         spec={spec}
@@ -253,6 +255,7 @@ function renderInlineFence(key: Key, context: GenuiFenceContext | undefined, spe
           : fenceStateKey(sessionId, context.source.id, JSON.stringify(spec))}
       />
     </ErrorBoundary>
+    </DrillScopeContext.Provider>
   )
 }
 

@@ -19,6 +19,7 @@ import { CHART_COLORS } from './blocks/charts.tsx'
 import { GENUI_LIMITS } from './genui-runtime/limits.ts'
 import { useGenuiAction } from './action-context.ts'
 import { diagBump } from './diagnostics.ts'
+import { useDrillScope } from './drill-scope.ts'
 import type { GenuiEChart } from './spec.ts'
 
 /** Which engine bundle this node needs (progressive disclosure). */
@@ -419,14 +420,6 @@ function optItemStyleColor(color: string | undefined, _i: number, _series: unkno
 
 interface DrillTreeNode { name?: unknown; children?: DrillTreeNode[]; [k: string]: unknown }
 
-/** Registry namespace: set by the fence renderer from the live session id so
- * two open sessions writing the same `drill.key` can never merge into each
- * other's charts (module-level Map would otherwise be page-global). */
-let drillScope = 'dom'
-export function setDrillScope(scope: string | undefined): void {
-  drillScope = scope ?? 'dom'
-}
-const registryKey = (key: string): string => `${drillScope}::${key}`
 
 /** Per-page registry: (session::key) → merge fn of the still-mounted drill
  * chart. Patch fences in later messages look their target chart up here. */
@@ -489,6 +482,8 @@ export function EChartNode({ node }: { node: GenuiEChart }) {
   // the screen and drilled-in subtrees are lost on every re-render.
   const lastSourceRef = useRef<unknown>(null)
   const mergedPatchesRef = useRef<Array<{ target: string; children: unknown[] }>>([])
+  const scope = useDrillScope()
+  const registryKey = (key: string): string => `${scope}::${key}`
 
   useEffect(() => {
     let alive = true
