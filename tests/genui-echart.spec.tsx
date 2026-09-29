@@ -395,6 +395,24 @@ describe('EChartNode: graph hierarchy 布局（关系图谱树状阅读）', () 
     expect(links.every(l => typeof l.label === 'string')).toBe(true)
   })
 
+  it('drill 图缺省即 hierarchy（旧会话围栏没有 graphLayout 字段也不退回力导向）', async () => {
+    // 回归：围栏 JSON 存在会话里，层级字段上线前的旧消息重开时按当前渲染器
+    // 重画——没有这个缺省，旧关系图会退化成力导向一团。
+    vi.mocked(createChart).mockResolvedValue(fakeInstance())
+    const node: GenuiEChart = {
+      type: 'echart', preset: 'graph', height: 400, drill: { key: '设备基础模型' },
+      data: [{ label: '设备基础模型' }, { label: '能源基础模型' }],
+      links: [{ from: '设备基础模型', to: '能源基础模型', label: '设备与能源的关系' }],
+    }
+    render(<EChartNode node={node} />)
+    await vi.waitFor(() => expect(createChart).toHaveBeenCalled())
+    const series = optOf().series![0]!
+    expect(series.layout).toBe('none')
+    const nodes = series.data as Array<{ name: string; x: number }>
+    const root = nodes.find(n => n.name === '设备基础模型')!
+    expect(root.x).toBeLessThan(nodes.find(n => n.name === '能源基础模型')!.x)
+  })
+
   it('force 缺省布局不变（无 graphLayout 时仍为力导向）', async () => {
     vi.mocked(createChart).mockResolvedValue(fakeInstance())
     const node = g()

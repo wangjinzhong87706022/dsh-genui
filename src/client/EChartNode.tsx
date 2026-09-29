@@ -365,7 +365,13 @@ function presetOption(node: GenuiEChart, el?: HTMLElement | null): Record<string
       // Hierarchy layout: root (first data item) on the left, BFS layers into
       // columns — the tree-like reading order relation charts need. All edges
       // survive (a tree series could not draw the back-edges).
-      if (node.graphLayout === 'hierarchy' && names.length > 1 && links.length > 0) {
+      //
+      // `drill` charts DEFAULT to hierarchy even when the fence omits
+      // `graphLayout`: old sessions store fences generated before the field
+      // existed, and re-rendering them must not regress the relation graph to
+      // a force blob (user-reported). drill is ours — hierarchy is its design.
+      const graphLayout = node.graphLayout ?? (node.drill !== undefined ? 'hierarchy' : undefined)
+      if (graphLayout === 'hierarchy' && names.length > 1 && links.length > 0) {
         const adjacency = new Map<string, string[]>()
         for (const l of links) {
           if (!adjacency.has(l.from)) adjacency.set(l.from, [])
