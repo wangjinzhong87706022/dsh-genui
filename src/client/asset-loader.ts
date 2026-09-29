@@ -49,6 +49,19 @@ export function assetUrl(file: string): string {
   return `${ASSET_DIR}/${file}${rev === undefined ? '' : `?rev=${rev}`}`
 }
 
+/**
+ * Resolve an asset SUBDIRECTORY base URL (trailing slash, no rev query) — for
+ * consumers that append their own file names to a directory (pdf.js
+ * `cMapUrl` does exactly that: cMapUrl + '<name>.bcmap'; a query on the
+ * directory would corrupt the appended name, so no rev here — the route
+ * serves no-cache anyway).
+ */
+export function assetDirUrl(sub: string): string {
+  const dir = `${sub.replace(/\/?$/, '/')}`
+  if (embeddedAssetBase !== undefined) return new URL(dir, embeddedAssetBase).href
+  return `${ASSET_DIR}/${dir}`
+}
+
 const pending = new Map<string, Promise<Record<string, unknown>>>()
 
 /**
@@ -56,10 +69,10 @@ const pending = new Map<string, Promise<Record<string, unknown>>>()
  * file: repeated requests (several mermaid nodes, re-renders) share one
  * script load; a failed load stays failed for the page (the component shows
  * its fallback).
- * @param name - 'mermaid', 'three', 'echarts-core', or 'echarts-full'.
+ * @param name - 'mermaid', 'three', 'echarts-core', 'echarts-full', or 'pdfjs'.
  * @returns the registered engine surface.
  */
-export function loadGenuiAsset<T>(name: 'mermaid' | 'three' | 'echarts-core' | 'echarts-full'): Promise<T> {
+export function loadGenuiAsset<T>(name: 'mermaid' | 'three' | 'echarts-core' | 'echarts-full' | 'pdfjs'): Promise<T> {
   const file = `${name}.js`
   const existing = pending.get(file)
   if (existing !== undefined) return existing as Promise<T>

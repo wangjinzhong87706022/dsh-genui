@@ -40,6 +40,11 @@ const ASSET_ROUTE_PATH = '/plugins/@changfenhuang/dsh-genui/assets'
 /** Safe flat file names only: no slashes, no traversal, js assets only. */
 const ASSET_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.js$/
 
+/** pdf.js packed CMap files (`cmaps/<name>.bcmap`) for CJK PDF text — flat
+ * names, binary served as application/octet-stream. Required by the PDF.js
+ * asset (original-viewer); without them CJK 规程 PDF renders with 乱码. */
+const ASSET_CMAP_RE = /^cmaps\/([A-Za-z0-9][A-Za-z0-9._-]*\.bcmap)$/
+
 /** The handler itself (registered via the optional webServer probe). */
 async function serveGenuiAsset(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -62,7 +67,8 @@ async function serveGenuiAsset(req: IncomingMessage, res: ServerResponse): Promi
     return
   }
   const file = rel.slice(1)
-  if (!ASSET_FILE_RE.test(file)) {
+  const cmap = ASSET_CMAP_RE.exec(file)
+  if (cmap === null && !ASSET_FILE_RE.test(file)) {
     res.writeHead(404)
     res.end()
     return
@@ -71,10 +77,9 @@ async function serveGenuiAsset(req: IncomingMessage, res: ServerResponse): Promi
     // lib/index.js → ./assets/ = <pkg>/lib/assets/ (the tsdown asset outDir).
     const dir = fileURLToPath(new URL('./assets/', import.meta.url))
     const body = await readFile(join(dir, file))
-    res.writeHead(200, {
-      'content-type': 'text/javascript; charset=utf-8',
-      'cache-control': 'no-cache',
-    })
+    res.writeHead(200, cmap !== null
+      ? { 'content-type': 'application/octet-stream', 'cache-control': 'no-cache' }
+      : { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' })
     res.end(body)
   } catch {
     // Missing asset (old build) — a loud 404; the client shows its fallback.

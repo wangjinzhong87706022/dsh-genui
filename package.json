@@ -162,6 +162,7 @@
     "jsdom": "^25.0.0",
     "lightningcss": "^1.25.0",
     "mermaid": "11.16.0",
+    "pdfjs-dist": "^6.3.289",
     "react-dom": "^18.3.1",
     "three": "^0.180.0",
     "tsdown": "^0.22.2",
@@ -172,7 +173,7 @@
     "yaml": "^2.4.2"
   },
   "scripts": {
-    "build": "node scripts/clean.mjs && tsc -p tsconfig.json && tsdown",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.json && tsdown && node scripts/copy-cmaps.mjs",
     "test": "vitest run",
     "check": "node scripts/clean.mjs && tsc -p tsconfig.json && vitest run && tsdown",
     "prepack": "node scripts/prepack.mjs"

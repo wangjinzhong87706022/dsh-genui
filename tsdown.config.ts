@@ -136,7 +136,10 @@ const clientConfig: UserConfig = {
  * main client bundle never contains either engine, so the eager download
  * drops from ~9 MB to the small renderer core.
  */
-function assetConfig(name: 'mermaid' | 'three' | 'echarts', entry: string): UserConfig {
+function assetConfig(
+  name: 'mermaid' | 'three' | 'echarts' | 'pdfjs' | 'pdfjs-worker',
+  entry: string,
+): UserConfig {
   return {
     name: `${ID}/assets/${name}`,
     entry: { [`assets/${name}`]: entry },
@@ -191,4 +194,6 @@ export default [
   assetConfig('three', 'src/client/asset-three.ts'),
   assetConfig('echarts-core', 'src/client/asset-echarts-core.ts'),
   assetConfig('echarts-full', 'src/client/asset-echarts.ts'),
+  assetConfig('pdfjs', 'src/client/asset-pdfjs.ts'),
+  assetConfig('pdfjs-worker', 'src/client/asset-pdfjs-worker.ts'),
 ]

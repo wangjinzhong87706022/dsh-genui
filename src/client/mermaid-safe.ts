@@ -120,3 +120,31 @@ export function ensureFlowchartKind(code: string): string {
   if (!FLOWCHART_EDGE.test(trimmed)) return code
   return `graph TD\n${trimmed}`
 }
+
+
+/**
+ * Pre-render syntax lint for model-authored graph/flowchart sources — the
+ * checks a regex can own, with line numbers precise enough for the model to
+ * fix in one validate round (render-time mermaid errors currently degrade to
+ * a source dump with no feedback loop). Catches the observed live failures:
+ * unbalanced pipe edge labels (`E -->|是, F[x]` — 漏闭合竖线), unbalanced
+ * node-label brackets, stray quotes, and backticks (lexically illegal).
+ * Returns human-readable errors; empty array = lint-clean.
+ */
+export function lintMermaidSource(code: string): string[] {
+  const errors: string[] = []
+  if (code.includes('`')) errors.push('源码含反引号 ` —— mermaid 标签词法非法，删除所有反引号')
+  code.split('\n').forEach((line, i) => {
+    const n = i + 1
+    if (/(-{2,}|={2,}|-\.)[^\n]*\|/.test(line)) {
+      const pipes = (line.match(/\|/g) ?? []).length
+      if (pipes % 2 !== 0) errors.push(`第 ${n} 行：边标签的 | 不配对（${pipes} 个）——形如 A -->|标签| B，| 必须成对闭合`)
+    }
+    const opens = (line.match(/\[/g) ?? []).length
+    const closes = (line.match(/\]/g) ?? []).length
+    if (opens !== closes) errors.push(`第 ${n} 行：方括号不配对（[ ×${opens}、] ×${closes}）——节点标签的 [ ] 需成对`)
+    const quotes = (line.match(/"/g) ?? []).length
+    if (quotes % 2 !== 0) errors.push(`第 ${n} 行：双引号不配对（${quotes} 个）`)
+  })
+  return errors
+}

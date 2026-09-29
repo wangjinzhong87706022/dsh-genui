@@ -1,0 +1,2 @@
+# markdown 恒 LF：frontmatter yaml 与示例围栏的正则/解析对  敏感（tests/skill-md）
+*.md text eol=lf

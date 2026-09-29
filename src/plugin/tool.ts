@@ -27,6 +27,46 @@ import {
 import type { GenuiProcessResult } from '../client/guard.ts'
 import { COMPONENT_SCHEMAS } from '../client/genui-runtime/schema.ts'
 import { completeFenceJson } from '../shared/fence-repair.ts'
+import { lintMermaidSource, repairMermaidSource } from '../client/mermaid-safe.ts'
+
+/** 递归收集 spec 里 mermaid 节点的源码（validate 的语法预检对象）。 */
+function mermaidSourcesOf(value: unknown, out: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    for (const item of value) mermaidSourcesOf(item, out)
+    return out
+  }
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>
+    if (record.type === 'mermaid' && typeof record.code === 'string') out.push(record.code)
+    for (const child of Object.values(record)) mermaidSourcesOf(child, out)
+  }
+  return out
+}
+
+/**
+ * mermaid 源码的发送前语法裁决：lint 不过时先跑 repairMermaidSource（既有纯
+ * 函数修复器——反引号/`<br/>`/未引号中文标签/含括号管道标签），修干净就把修复
+ * 后源码直接返给模型照抄（对齐 JSON 修复回路的"给成品不给改法"原则）；修不
+ * 干净则返回逐行错误。null = 无 mermaid 节点或全部 lint 通过。
+ */
+function mermaidVerdict(value: unknown): string | null {
+  const sources = mermaidSourcesOf(value)
+  if (sources.length === 0) return null
+  const lines: string[] = []
+  for (const [i, src] of sources.entries()) {
+    const errors = lintMermaidSource(src)
+    if (errors.length === 0) continue
+    const tag = sources.length > 1 ? `mermaid 源码 #${i + 1}` : 'mermaid 源码'
+    const repaired = repairMermaidSource(src)
+    const repairedClean = lintMermaidSource(repaired).length === 0 && repaired !== src
+    if (repairedClean) {
+      lines.push(`❌ ${tag} 语法预检未过：\n${errors.map(e => `  - ${e}`).join('\n')}\n  已自动修复，下面是修复后的 mermaid 源码，直接作为 mermaid 节点的 code 发出即可：\n\`\`\`\n${repaired}\n\`\`\``)
+    } else {
+      lines.push(`❌ ${tag} 语法预检未过（自动修复未能恢复）：\n${errors.map(e => `  - ${e}`).join('\n')}\n  原文：\n\`\`\`\n${src}\n\`\`\`\n  请修正后重新调用本工具验证。配方：节点标签 ≤12 字纯文字（禁 ²√≥±、上下标、引号、方括号、|）；边形如 A -->|≤6字| B（| 成对闭合）；公式放图外正文用 $…$。`)
+    }
+  }
+  return lines.length > 0 ? lines.join('\n\n') : null
+}
 
 /**
  * Arguments schema: an open `spec` slot. The schema must NOT reject anything
@@ -457,6 +497,10 @@ export function createValidateDshUiTool(): ToolDefinition {
         const repaired = completeFenceJson(raw)
         if (repaired !== null) {
           const repairedValue = JSON.parse(repaired.text) as unknown
+          const mermaidFailure = mermaidVerdict(repairedValue)
+          if (mermaidFailure !== null) {
+            return `❌ dsh-ui 围栏 JSON 已自动修复，但 ${mermaidFailure}\n（JSON 部分无需再改，只需按上面对照修正 mermaid 源码后重新验证。）`
+          }
           const processed = processRenderableValue(repairedValue)
           const chartFailure = formatProcessFailure(processed)
           if (chartFailure !== undefined) return chartFailure
@@ -471,6 +515,8 @@ export function createValidateDshUiTool(): ToolDefinition {
       const processed = processRenderableValue(parsed)
       const chartFailure = formatProcessFailure(processed)
       if (chartFailure !== undefined) return chartFailure
+      const mermaidFailure = mermaidVerdict(parsed)
+      if (mermaidFailure !== null) return mermaidFailure
       if (processed.spec === null || processed.errors.length > 0) {
         return droppedNodeFailure(processed, parsed)
           ?? `❌ 不是合法 GenUI spec：${processed.errors.join('；') || '根对象需要 "items" 数组，且每个节点 type 必须在白名单内（见系统提示词）'}。请修正后重新验证。`
